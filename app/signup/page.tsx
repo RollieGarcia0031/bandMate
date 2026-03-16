@@ -7,6 +7,7 @@ import { Music, ArrowRight, ArrowLeft, Check, Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 
 const GENRES = [
   "Rock", "Metal", "Jazz", "Blues", "Classical", "Hip-Hop",
@@ -82,7 +83,10 @@ export default function SignupPage() {
   const [step, setStep] = useState(1)
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({})
+  const [formError, setFormError] = useState<string | null>(null)
   const [formData, setFormData] = useState<FormData>({
     name: "",
     email: "",
@@ -99,6 +103,8 @@ export default function SignupPage() {
   function updateField<K extends keyof FormData>(key: K, value: FormData[K]) {
     setFormData((prev) => ({ ...prev, [key]: value }))
     setErrors((prev) => ({ ...prev, [key]: undefined }))
+    setFormError(null)
+    setSuccessMessage(null)
   }
 
   function toggleArrayItem(key: "instruments" | "genres" | "goals", item: string) {
@@ -110,6 +116,8 @@ export default function SignupPage() {
       }
     })
     setErrors((prev) => ({ ...prev, [key]: undefined }))
+    setFormError(null)
+    setSuccessMessage(null)
   }
 
   function validateStep(): boolean {
@@ -153,10 +161,47 @@ export default function SignupPage() {
     setStep((s) => Math.max(s - 1, 1))
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!validateStep()) return
-    // Supabase auth will be wired in later
-    router.push("/")
+    setLoading(true)
+    setFormError(null)
+    setSuccessMessage(null)
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const { data, error } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.name,
+            instruments: formData.instruments,
+            genres: formData.genres,
+            goals: formData.goals,
+            bio: formData.bio,
+            location: formData.location,
+            experience: formData.experience,
+          },
+        },
+      })
+
+      if (error) {
+        setFormError(error.message)
+        return
+      }
+
+      if (data.session) {
+        router.push("/")
+        return
+      }
+
+      setSuccessMessage("Account created. Please check your email to verify your account.")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Something went wrong during sign up."
+      setFormError(message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const stepLabels = ["Account", "Your Sound", "Your Goals", "About You"]
@@ -222,6 +267,18 @@ export default function SignupPage() {
             </p>
             <StepIndicator currentStep={step} />
           </div>
+
+          {formError && (
+            <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3">
+              <p className="text-sm text-destructive">{formError}</p>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3">
+              <p className="text-sm text-primary">{successMessage}</p>
+            </div>
+          )}
 
           {/* Step 1 — Account Details */}
           {step === 1 && (
@@ -467,7 +524,7 @@ export default function SignupPage() {
           {/* Navigation */}
           <div className="mt-8 flex items-center justify-between gap-4">
             {step > 1 ? (
-              <Button variant="ghost" onClick={handleBack} className="gap-2">
+              <Button variant="ghost" onClick={handleBack} className="gap-2" disabled={loading}>
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button>
@@ -476,13 +533,13 @@ export default function SignupPage() {
             )}
 
             {step < TOTAL_STEPS ? (
-              <Button onClick={handleNext} className="gap-2">
+              <Button onClick={handleNext} className="gap-2" disabled={loading}>
                 Continue
                 <ArrowRight className="h-4 w-4" />
               </Button>
             ) : (
-              <Button onClick={handleSubmit} className="gap-2">
-                Create Account
+              <Button onClick={handleSubmit} className="gap-2" disabled={loading}>
+                {loading ? "Creating..." : "Create Account"}
                 <Check className="h-4 w-4" />
               </Button>
             )}

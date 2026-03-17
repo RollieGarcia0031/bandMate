@@ -7,6 +7,7 @@ import { Music, Eye, EyeOff, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -32,11 +33,24 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!validate()) return
-    setLoading(true)
-    // Supabase auth will be wired in later
-    await new Promise((r) => setTimeout(r, 800))
-    setLoading(false)
-    router.push("/")
+    try {
+      setLoading(true);
+      const supabase =  createSupabaseBrowserClient();
+      const { error } = await supabase.auth.signInWithPassword(
+        { email: formData.email, password: formData.password }
+      );
+
+      if (error) {
+        setErrors((prev) => ({ ...prev, form: error.message }));
+        return;
+      }
+      
+      router.push("/");
+    } catch (error) {
+      setErrors((prev) => ({ ...prev, form: "An unexpected error occurred. Please try again." }));
+    } finally {
+      setLoading(false);
+    }    
   }
 
   return (

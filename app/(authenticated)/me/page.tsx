@@ -39,7 +39,7 @@ export default function MePage() {
 
         {/* Settings Button */}
         <Link
-          href="/me/settings"
+          href="/settings"
           className="absolute top-4 right-4 p-2 rounded-full bg-background/50 backdrop-blur-sm hover:bg-background/80 transition-colors"
         >
           <Settings className="w-5 h-5 text-foreground" />

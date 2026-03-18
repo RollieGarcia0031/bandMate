@@ -1,168 +1,319 @@
-# BandMate Database Schema Explanation
+# BandMate Database Model (Source of Truth: Initial Migration)
 
-## Table of Contents
-- [Database Schema Explanation](#database-schema-explanation)
-- [Database Schema Diagram](#database-schema-diagram)
-- [Database Migrations](#database-migrations)
+This document explains the **actual** database model defined in:
 
-This document outlines the database schema for BandMate, detailing the tables and their relationships. The schema is designed to support user profiles, musical preferences, project collaboration, and social interactions within the platform.
+- `supabase/migrations/20260317134714_initial_tables.sql`
 
-## Table Relationships Overview
+It replaces assumptions with what is explicitly enforced by SQL constraints, keys, checks, and triggers.
 
-The database is structured around key entities such as `users`, `profiles`, `instruments`, `genres`, `posts`, `projects`, and `conversations`. Relationships are established primarily through foreign keys, ensuring data integrity and enabling efficient querying of related information.
+## Scope and Core Principle
 
-Here's a breakdown of the main tables and their connections:
+- Application user identity is stored in `auth.users` (Supabase Auth).
+- App-facing profile data is stored in `public.profiles`.
+- `public.profiles.id` is both:
+  - the primary key of `profiles`, and
+  - a foreign key to `auth.users(id)` (`ON DELETE CASCADE`).
 
-### 1. `users` Table
-- Stores core user authentication and account information.
-- **`id`**: Unique identifier for each user.
-- **`profiles.user_id`**: One-to-one relationship with `users.id`. Each user has exactly one profile.
-- **`posts.user_id`**: One-to-many relationship. A user can create multiple posts.
-- **`swipes.user_id`**: One-to-many relationship. A user can perform multiple swipes.
-- **`matches.user1_id`, `matches.user2_id`**: Many-to-many relationship (through `matches` table). Users can be matched with other users.
-- **`messages.sender_id`**: One-to-many relationship. A user can send multiple messages.
-- **`projects.created_by`**: One-to-many relationship. A user can create multiple projects.
-- **`project_members.user_id`**: Many-to-many relationship (through `project_members` table). Users can be members of multiple projects.
-- **`project_files.uploaded_by`**: One-to-many relationship. A user can upload multiple files to projects.
+So the model is effectively **Auth User 1 → 1 Profile**.
 
-### 2. `profiles` Table
-- Stores detailed public profile information for users.
-- **`user_id`**: Primary key and foreign key referencing `users.id`. This establishes a one-to-one relationship.
-- **`profile_photos.user_id`**: One-to-many relationship. A profile can have multiple photos.
-- **`user_instruments.user_id`**: One-to-many relationship (through `user_instruments` table). A profile can be associated with multiple instruments.
-- **`user_genres.user_id`**: One-to-many relationship (through `user_genres` table). A profile can be associated with multiple genres.
+---
 
-### 3. `profile_photos` Table
-- Stores URLs and order for profile pictures.
-- **`user_id`**: Foreign key referencing `profiles.user_id`.
+## Entities and Relationships
 
-### 4. `instruments` Table
-- A lookup table for different musical instruments.
-- **`user_instruments.instrument_id`**: Many-to-many relationship with `profiles.user_id` through the `user_instruments` join table.
+## 1) Reference tables
 
-### 5. `genres` Table
-- A lookup table for different musical genres.
-- **`user_genres.genre_id`**: Many-to-many relationship with `profiles.user_id` through the `user_genres` join table.
+### `instruments`
+- Purpose: canonical instrument list.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `name VARCHAR(50) UNIQUE NOT NULL`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
 
-### 6. `user_instruments` Table (Join Table)
-- Links users to the instruments they play, along with their proficiency.
-- Composite primary key: (`user_id`, `instrument_id`).
+### `genres`
+- Purpose: canonical genre list.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `name VARCHAR(50) UNIQUE NOT NULL`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
 
-### 7. `user_genres` Table (Join Table)
-- Links users to their preferred musical genres.
-- Composite primary key: (`user_id`, `genre_id`).
+---
 
-### 8. `posts` Table
-- Stores user-generated content, such as videos and musical ideas.
-- **`user_id`**: Foreign key referencing `users.id`.
-- **`swipes.post_id`**: One-to-many relationship. A post can be swiped on by multiple users.
+## 2) User profile aggregate
 
-### 9. `swipes` Table
-- Records user interactions (like, pass, superlike) on posts.
-- **`user_id`**: Foreign key referencing `users.id`.
-- **`post_id`**: Foreign key referencing `posts.id`.
+### `profiles`
+- Purpose: public/user-editable profile data tied to auth identity.
+- Primary key and foreign key:
+  - `id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE`
+- Key identity fields:
+  - `username VARCHAR(50) UNIQUE NOT NULL`
+  - `display_name VARCHAR(100) NOT NULL`
+- Additional fields:
+  - `bio TEXT`
+  - `age SMALLINT CHECK (age >= 13)`
+  - `gender VARCHAR(20)`
+  - `latitude DECIMAL(10,8)`
+  - `longitude DECIMAL(11,8)`
+  - `city VARCHAR(100)`
+  - `experience_years SMALLINT`
+  - `spotify_url TEXT`
+  - `soundcloud_url TEXT`
+  - `youtube_url TEXT`
+  - `looking_for TEXT[]`
+  - `last_active TIMESTAMPTZ DEFAULT NOW()`
+  - `deleted_at TIMESTAMPTZ`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+  - `updated_at TIMESTAMPTZ DEFAULT NOW()`
 
-### 10. `matches` Table
-- Records successful mutual likes between users.
-- **`user1_id`, `user2_id`**: Foreign keys referencing `users.id`. Ensures each match is unique and ordered.
-- **`conversations.match_id`**: One-to-one relationship. Each match can have one conversation.
+### Auto-maintenance
+- Trigger `trig_profiles_updated_at` calls `public.update_updated_at_column()` before update.
+- This guarantees `updated_at` refresh on row updates.
 
-### 11. `conversations` Table
-- Initiated upon a successful match between two users.
-- **`match_id`**: Foreign key referencing `matches.id`. Unique constraint ensures one conversation per match.
-- **`messages.conversation_id`**: One-to-many relationship. A conversation can have multiple messages.
+---
 
-### 12. `messages` Table
-- Stores individual messages within a conversation.
-- **`conversation_id`**: Foreign key referencing `conversations.id`.
-- **`sender_id`**: Foreign key referencing `users.id`.
+## 3) Profile media and preference links
 
-### 13. `projects` Table
-- Facilitates musical collaboration among users.
-- **`created_by`**: Foreign key referencing `users.id`.
-- **`project_members.project_id`**: Many-to-many relationship with `users.id` through `project_members` table.
-- **`project_files.project_id`**: One-to-many relationship. A project can have multiple files.
+### `profile_photos`
+- Purpose: ordered photos per profile.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `url TEXT NOT NULL`
+  - `order SMALLINT NOT NULL DEFAULT 0` (quoted as `"order"` in SQL)
+  - `uploaded_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraint:
+  - `UNIQUE (user_id, order)`
+- Effect:
+  - a user can have multiple photos, but each order slot is unique per user.
 
-### 14. `project_members` Table (Join Table)
-- Defines which users are part of a specific project and their role.
-- Composite primary key: (`project_id`, `user_id`).
+### `user_instruments` (join table)
+- Purpose: many-to-many between profiles and instruments + skill level.
+- Keys:
+  - `PRIMARY KEY (user_id, instrument_id)`
+- Foreign keys:
+  - `user_id → profiles(id) ON DELETE CASCADE`
+  - `instrument_id → instruments(id) ON DELETE CASCADE`
+- Domain rule:
+  - `proficiency` must be one of `Beginner | Intermediate | Advanced | Pro`
 
-### 15. `project_files` Table
-- Stores files (audio, lyrics, etc.) associated with a project.
-- **`project_id`**: Foreign key referencing `projects.id`.
-- **`uploaded_by`**: Foreign key referencing `users.id`.
+### `user_genres` (join table)
+- Purpose: many-to-many between profiles and genres.
+- Keys:
+  - `PRIMARY KEY (user_id, genre_id)`
+- Foreign keys:
+  - `user_id → profiles(id) ON DELETE CASCADE`
+  - `genre_id → genres(id) ON DELETE CASCADE`
 
-## Database Schema Diagram
+---
 
-Below is a visual representation of the BandMate database schema, illustrating the tables and their interconnections.
+## 4) Social content and discovery flow
 
-![Database Schema Diagram](./asset/sql_tables.jpg)
+### `posts`
+- Purpose: user posts (video-first in current schema).
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `title VARCHAR(120)`
+  - `description TEXT`
+  - `video_url TEXT NOT NULL`
+  - `thumbnail_url TEXT`
+  - `duration_sec SMALLINT`
+  - `visibility VARCHAR(20) DEFAULT 'public'`
+  - `likes_count INTEGER DEFAULT 0`
+  - `comments_count INTEGER DEFAULT 0`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+  - `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraint:
+  - `visibility IN ('public', 'followers', 'private')`
+- Trigger:
+  - `trig_posts_updated_at` updates `updated_at` on row update.
 
-## Database Migrations
-### (Development Instructions)
+### `swipes`
+- Purpose: reaction from a user to a post.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE`
+  - `direction VARCHAR(10) NOT NULL`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraints:
+  - `direction IN ('like', 'pass', 'superlike')`
+  - `UNIQUE (user_id, post_id)`
+- Effect:
+  - one user can only swipe once per post.
 
-This section provides instructions for developers on how to manage and apply database migrations using `npx supabase` commands. These commands are crucial for evolving the database schema in a controlled manner.
+### `matches`
+- Purpose: canonical mutual-user pairing.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `user1_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `user2_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraints:
+  - `CHECK (user1_id < user2_id)` (forces deterministic ordering)
+  - `UNIQUE (user1_id, user2_id)`
+- Effect:
+  - same pair cannot be duplicated or stored in reverse order.
 
-### 1. Link your Supabase project (if not already linked)
+### `conversations`
+- Purpose: chat channel linked to a match.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `match_id UUID UNIQUE REFERENCES matches(id) ON DELETE CASCADE`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+- Effect:
+  - at most one conversation per match (`UNIQUE`).
 
-If you haven't already, link your local Supabase CLI to your remote Supabase project:
+### `messages`
+- Purpose: message events in a conversation.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE`
+  - `sender_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `content TEXT NOT NULL`
+  - `media_url TEXT`
+  - `sent_at TIMESTAMPTZ DEFAULT NOW()`
+  - `read_at TIMESTAMPTZ`
+
+---
+
+## 5) Collaboration model
+
+### `projects`
+- Purpose: collaboration project container.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `title VARCHAR(100) NOT NULL`
+  - `description TEXT`
+  - `created_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `status VARCHAR(20) DEFAULT 'active'`
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`
+  - `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraint:
+  - `status IN ('draft','active','completed','archived')`
+- Trigger:
+  - `trig_projects_updated_at` updates `updated_at` on row update.
+
+### `project_members` (join table)
+- Purpose: many-to-many between projects and profiles.
+- Keys:
+  - `PRIMARY KEY (project_id, user_id)`
+- Foreign keys:
+  - `project_id → projects(id) ON DELETE CASCADE`
+  - `user_id → profiles(id) ON DELETE CASCADE`
+- Extra fields:
+  - `role VARCHAR(50)`
+  - `joined_at TIMESTAMPTZ DEFAULT NOW()`
+
+### `project_files`
+- Purpose: files attached to projects.
+- Columns:
+  - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+  - `project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE`
+  - `uploaded_by UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE`
+  - `filename VARCHAR(255)`
+  - `url TEXT NOT NULL`
+  - `file_type VARCHAR(20)`
+  - `title VARCHAR(100)`
+  - `uploaded_at TIMESTAMPTZ DEFAULT NOW()`
+- Constraint:
+  - `file_type IN ('audio','sheet','video','lyrics','other')`
+
+---
+
+## 6) Database functions and triggers
+
+### `public.update_updated_at_column()`
+- Generic trigger function to set `NEW.updated_at = NOW()`.
+- Used by:
+  - `profiles`
+  - `posts`
+  - `projects`
+
+### `public.handle_new_user()` + trigger `on_auth_user_created`
+- On insert into `auth.users`, it attempts to auto-create `public.profiles` row.
+- Behavior:
+  - `id = NEW.id`
+  - `username = raw_user_meta_data.username` fallback `user_<first8uuid>`
+  - `display_name = raw_user_meta_data.full_name` fallback `New Musician`
+  - `ON CONFLICT (id) DO NOTHING`
+
+This means profile bootstrap is handled in DB, not only at application layer.
+
+---
+
+## Key Integrity Rules (Important)
+
+1. **Most user-facing tables reference `profiles(id)`, not `auth.users` directly.**
+2. **Cascade deletes are widely used**, so deleting an auth user cascades to profile, then to dependent rows.
+3. **Uniqueness prevents duplicates** in:
+   - `profiles.username`
+   - `profile_photos(user_id, order)`
+   - `swipes(user_id, post_id)`
+   - `matches(user1_id, user2_id)`
+   - `conversations.match_id`
+4. **Enums are modeled as `VARCHAR + CHECK`**, not PostgreSQL enum types.
+5. **Soft delete exists only on profiles** (`deleted_at`), while hard deletes are still possible and cascaded.
+
+---
+
+## Known Model Gaps / Ambiguities
+
+These are not errors in SQL syntax, but design realities in the current migration:
+
+- No explicit index definitions beyond PK/UNIQUE (query performance may depend on implicit indexes only).
+- Counter fields on `posts` (`likes_count`, `comments_count`) are not maintained by DB triggers in this migration.
+- `conversations.match_id` is not `NOT NULL`; schema allows a conversation without a match row.
+- No check preventing `matches.user1_id = user2_id` explicitly (UUID ordering check likely prevents equality in practice, but explicit check would be clearer).
+- No domain checks on coordinates (`latitude`, `longitude`) or non-negative checks for fields like `duration_sec`, `experience_years`.
+- RLS/policies are not created in this migration (comment says to configure them after).
+
+---
+
+## Suggestions for Future Updates
+
+1. **Add explicit indexes for read-heavy paths**
+   - Example targets: `posts(user_id, created_at)`, `messages(conversation_id, sent_at)`, `swipes(post_id)`.
+
+2. **Tighten data quality constraints**
+   - Add checks:
+     - `latitude BETWEEN -90 AND 90`
+     - `longitude BETWEEN -180 AND 180`
+     - `duration_sec >= 0`
+     - `experience_years >= 0`
+   - Consider `CHECK (user1_id <> user2_id)` in `matches`.
+
+3. **Make conversation linkage stricter**
+   - If business rule is “every conversation belongs to a match”, make `conversations.match_id NOT NULL`.
+
+4. **Decide and formalize soft-delete strategy**
+   - If soft-delete is desired platform-wide, add `deleted_at` patterns (or archive tables) beyond `profiles`.
+
+5. **Move status-like `VARCHAR + CHECK` to reusable enums or reference tables (optional)**
+   - Improves consistency and discoverability when domain values expand.
+
+6. **Add trigger/function strategy for denormalized counters**
+   - Either maintain `posts.likes_count/comments_count` via DB logic, or remove and compute dynamically.
+
+7. **Ship RLS policies in migrations**
+   - Add explicit row-level policies for profiles, posts, messages, projects, files.
+   - This avoids security drift between environments.
+
+8. **Document lifecycle flows as sequence diagrams**
+   - Sign-up → profile bootstrap → posting → swipe/match → conversation/message.
+   - This helps future contributors reason about data ownership and cascade effects.
+
+---
+
+## Migration Operations (Supabase CLI)
 
 ```bash
 npx supabase login
 npx supabase link --project-ref <your-project-ref>
-```
-
-Replace `<your-project-ref>` with your actual Supabase project reference ID.
-
-### 2. Start the Supabase local development environment
-
-To work with migrations locally, ensure your Supabase local development environment is running:
-
-```bash
 npx supabase start
-```
-
-This command spins up a local instance of PostgreSQL, PostgREST, Auth, Storage, and other Supabase services.
-
-### 3. Generate a new migration
-
-When you make changes to your local database schema (e.g., adding a new table, altering a column), you need to generate a migration script.
-You can create an empty migration file with a descriptive name using the following command:
-
-```bash
 npx supabase migration new <migration-name>
-```
-
-Replace `<migration-name>` with a descriptive name for your migration (e.g., `add_posts_table`, `update_user_profiles`). This command will create a new empty SQL file in the `supabase/migrations` directory. You will then manually add the SQL commands for your schema changes to this file.
-
-### 4. Apply migrations to your local database
-
-To apply pending migrations (including newly generated ones) to your local Supabase database:
-
-```bash
 npx supabase db push
-```
-
-This command reads all migration files in `supabase/migrations` and applies them in order to your local database. It also resets the local database if necessary.
-
-### 5. Reset your local database
-
-If you need to completely reset your local database to its initial state (e.g., to clear all data and reapply all migrations from scratch):
-
-```bash
 npx supabase db reset
-```
-
-Use this command with caution, as it will delete all data in your local development database.
-
-### 6. Apply migrations to a remote database
-
-To apply migrations to your remote Supabase project (e.g., staging or production), after you have created and populated your migration files locally:
-
-```bash
 npx supabase db push --linked
 ```
 
-**Important:** Always test your migration locally before pushing to a remote environment. Ensure that the migration files in your `supabase/migrations` directory accurately reflect the desired changes.
-
-By following these steps, you can effectively manage your BandMate database schema changes and ensure consistency across development, staging, and production environments.
+Use `db push --linked` only after validating locally.

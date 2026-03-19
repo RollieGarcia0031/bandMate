@@ -45,7 +45,7 @@ export default function LoginPage() {
         return;
       }
       
-      router.push("/");
+      router.push("/feed");
     } catch (error) {
       setErrors((prev) => ({ ...prev, form: "An unexpected error occurred. Please try again." }));
     } finally {

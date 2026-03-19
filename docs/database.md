@@ -1,18 +1,19 @@
-# BandMate Database Model (Source of Truth: Initial Migration)
+# BandMate Database Model (Source of Truth: Applied Migrations)
 
-This document explains the **actual** database model defined in:
+This document explains the database model defined in:
 
 - `supabase/migrations/20260317134714_initial_tables.sql`
+- `supabase/migrations/20260319000558_profile_update.sql`
 
-It replaces assumptions with what is explicitly enforced by SQL constraints, keys, checks, and triggers.
+It focuses on what the SQL migrations currently enforce, especially for the `public.profiles` table that powers the `/settings` page.
 
 ## Scope and Core Principle
 
-- Application user identity is stored in `auth.users` (Supabase Auth).
+- Application user identity is stored in `auth.users`.
 - App-facing profile data is stored in `public.profiles`.
 - `public.profiles.id` is both:
   - the primary key of `profiles`, and
-  - a foreign key to `auth.users(id)` (`ON DELETE CASCADE`).
+  - a foreign key to `auth.users(id)` with `ON DELETE CASCADE`.
 
 So the model is effectively **Auth User 1 → 1 Profile**.
 
@@ -47,22 +48,55 @@ So the model is effectively **Auth User 1 → 1 Profile**.
 - Key identity fields:
   - `username VARCHAR(50) UNIQUE NOT NULL`
   - `display_name VARCHAR(100) NOT NULL`
-- Additional fields:
+- Additional profile fields:
   - `bio TEXT`
-  - `age SMALLINT CHECK (age >= 13)`
+  - `birthday DATE`
+    - enforced as either `NULL` or a value from `1900-01-01` through at least 13 years before the current date
+    - this replaces the old stored `age` column as the source of truth for age-related UI
   - `gender VARCHAR(20)`
+    - allowed values: `Male`, `Female`, `Other`, `Prefer not to say`
   - `latitude DECIMAL(10,8)`
   - `longitude DECIMAL(11,8)`
   - `city VARCHAR(100)`
   - `experience_years SMALLINT`
+    - must be `NULL` or `>= 0`
+  - `experience_level VARCHAR(20)`
+    - allowed values: `Beginner`, `Intermediate`, `Expert`
   - `spotify_url TEXT`
   - `soundcloud_url TEXT`
   - `youtube_url TEXT`
   - `looking_for TEXT[]`
+    - each value must be one of:
+      - `Form a band`
+      - `Collaborate`
+      - `Jam sessions`
+      - `Find a teacher`
+      - `Teach`
+      - `Tour & perform`
   - `last_active TIMESTAMPTZ DEFAULT NOW()`
   - `deleted_at TIMESTAMPTZ`
   - `created_at TIMESTAMPTZ DEFAULT NOW()`
   - `updated_at TIMESTAMPTZ DEFAULT NOW()`
+
+### Profile/settings mapping
+The `/settings` page currently edits these `profiles` columns directly or conceptually:
+
+- `username`
+- `display_name`
+- `bio`
+- `birthday`
+- `gender`
+- `city`
+- `experience_years`
+- `experience_level`
+- `youtube_url`
+- `spotify_url`
+- `looking_for`
+
+Notes:
+- The UI should derive a display age from `birthday` rather than persisting a separate `age` value.
+- Instruments and genres selected on `/settings` belong in `user_instruments` and `user_genres`, not as columns on `profiles`.
+- Profile pictures are represented by `profile_photos`, not a dedicated `avatar_url` column on `profiles`.
 
 ### Auto-maintenance
 - Trigger `trig_profiles_updated_at` calls `public.update_updated_at_column()` before update.
@@ -245,60 +279,65 @@ This means profile bootstrap is handled in DB, not only at application layer.
 
 1. **Most user-facing tables reference `profiles(id)`, not `auth.users` directly.**
 2. **Cascade deletes are widely used**, so deleting an auth user cascades to profile, then to dependent rows.
-3. **Uniqueness prevents duplicates** in:
+3. **`profiles` now stores `birthday`, not a persisted `age` column.**
+   - Age should be derived at read time for feeds, cards, and profile displays.
+4. **Uniqueness prevents duplicates** in:
    - `profiles.username`
    - `profile_photos(user_id, order)`
    - `swipes(user_id, post_id)`
    - `matches(user1_id, user2_id)`
    - `conversations.match_id`
-4. **Enums are modeled as `VARCHAR + CHECK`**, not PostgreSQL enum types.
-5. **Soft delete exists only on profiles** (`deleted_at`), while hard deletes are still possible and cascaded.
+5. **Enums are modeled as `VARCHAR + CHECK`**, not PostgreSQL enum types.
+6. **Soft delete exists only on profiles** (`deleted_at`), while hard deletes are still possible and cascaded.
 
 ---
 
 ## Known Model Gaps / Ambiguities
 
-These are not errors in SQL syntax, but design realities in the current migration:
+These are not syntax errors in SQL, but design realities in the current migrations:
 
-- No explicit index definitions beyond PK/UNIQUE (query performance may depend on implicit indexes only).
-- Counter fields on `posts` (`likes_count`, `comments_count`) are not maintained by DB triggers in this migration.
-- `conversations.match_id` is not `NOT NULL`; schema allows a conversation without a match row.
-- No check preventing `matches.user1_id = user2_id` explicitly (UUID ordering check likely prevents equality in practice, but explicit check would be clearer).
-- No domain checks on coordinates (`latitude`, `longitude`) or non-negative checks for fields like `duration_sec`, `experience_years`.
-- RLS/policies are not created in this migration (comment says to configure them after).
+- No explicit index definitions beyond PK/UNIQUE, so query performance may rely on implicit indexes only.
+- Counter fields on `posts` (`likes_count`, `comments_count`) are not maintained by DB triggers in these migrations.
+- `conversations.match_id` is not `NOT NULL`, so the schema still allows a conversation without a match row.
+- No explicit check prevents `matches.user1_id = user2_id`; UUID ordering likely prevents equality in practice, but an explicit check would be clearer.
+- No URL-format validation exists for `spotify_url`, `soundcloud_url`, or `youtube_url`.
+- The birthday age-floor check is enforced on writes, but age itself is not materialized in the database.
+- RLS/policies are not created in these migrations.
 
 ---
 
 ## Suggestions for Future Updates
 
-1. **Add explicit indexes for read-heavy paths**
+1. **Expose derived age consistently**
+   - Add a query helper, database view, or API-layer mapper that computes age from `birthday` for feed cards and profile pages.
+
+2. **Add explicit indexes for read-heavy paths**
    - Example targets: `posts(user_id, created_at)`, `messages(conversation_id, sent_at)`, `swipes(post_id)`.
 
-2. **Tighten data quality constraints**
+3. **Tighten data quality constraints further**
    - Add checks:
      - `latitude BETWEEN -90 AND 90`
      - `longitude BETWEEN -180 AND 180`
      - `duration_sec >= 0`
-     - `experience_years >= 0`
    - Consider `CHECK (user1_id <> user2_id)` in `matches`.
 
-3. **Make conversation linkage stricter**
-   - If business rule is “every conversation belongs to a match”, make `conversations.match_id NOT NULL`.
+4. **Make conversation linkage stricter**
+   - If the business rule is “every conversation belongs to a match”, make `conversations.match_id NOT NULL`.
 
-4. **Decide and formalize soft-delete strategy**
+5. **Decide and formalize soft-delete strategy**
    - If soft-delete is desired platform-wide, add `deleted_at` patterns (or archive tables) beyond `profiles`.
 
-5. **Move status-like `VARCHAR + CHECK` to reusable enums or reference tables (optional)**
+6. **Move status-like `VARCHAR + CHECK` to reusable enums or reference tables (optional)**
    - Improves consistency and discoverability when domain values expand.
 
-6. **Add trigger/function strategy for denormalized counters**
+7. **Add trigger/function strategy for denormalized counters**
    - Either maintain `posts.likes_count/comments_count` via DB logic, or remove and compute dynamically.
 
-7. **Ship RLS policies in migrations**
+8. **Ship RLS policies in migrations**
    - Add explicit row-level policies for profiles, posts, messages, projects, files.
    - This avoids security drift between environments.
 
-8. **Document lifecycle flows as sequence diagrams**
+9. **Document lifecycle flows as sequence diagrams**
    - Sign-up → profile bootstrap → posting → swipe/match → conversation/message.
    - This helps future contributors reason about data ownership and cascade effects.
 

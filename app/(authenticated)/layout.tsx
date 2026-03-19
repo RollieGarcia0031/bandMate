@@ -1,11 +1,22 @@
+import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/app/app-sidebar"
 import { AppBottomNav } from "@/components/app/app-bottom-nav"
+import { createSupabaseServerClient } from "@/lib/supabase/server"
 
-export default function AuthenticatedLayout({
+export default async function AuthenticatedLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    redirect("/")
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Desktop Sidebar */}

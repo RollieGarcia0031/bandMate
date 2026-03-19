@@ -1,12 +1,14 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useMemo, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { ArrowLeft, Camera, Check, MapPin, Music, Save, Undo2 } from "lucide-react"
 import { saveSettingsAction } from "@/app/(authenticated)/settings/actions"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import { supabase_config } from "@/lib/supabase/config"
 import {
   EXPERIENCE_LEVELS,
   GENRES,
@@ -18,13 +20,18 @@ import {
 
 type SettingsFormProps = {
   initialData: SettingsFormData
+  userId: string
 }
 
-export function SettingsForm({ initialData }: SettingsFormProps) {
+const MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
+
+export function SettingsForm({ initialData, userId }: SettingsFormProps) {
   const [formData, setFormData] = useState(initialData)
   const [savedSnapshot, setSavedSnapshot] = useState(initialData)
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null)
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false)
   const [isSaving, startTransition] = useTransition()
+  const photoInputRef = useRef<HTMLInputElement | null>(null)
 
   const isDirty = useMemo(() => {
     return JSON.stringify(normalizeSettingsFormData(formData)) !== JSON.stringify(normalizeSettingsFormData(savedSnapshot))
@@ -54,6 +61,10 @@ export function SettingsForm({ initialData }: SettingsFormProps) {
   function handleDiscard() {
     setFormData(savedSnapshot)
     setFeedback(null)
+
+    if (photoInputRef.current) {
+      photoInputRef.current.value = ""
+    }
   }
 
   function handleSave() {
@@ -70,6 +81,66 @@ export function SettingsForm({ initialData }: SettingsFormProps) {
       setSavedSnapshot(result.data)
       setFeedback({ tone: "success", message: "Your profile settings were saved." })
     })
+  }
+
+  /**
+   * Uploads the selected image into the configured Supabase storage bucket,
+   * updates the local preview immediately, and leaves final persistence to the
+   * regular Save Changes action so picture updates follow the same discard flow.
+   */
+  async function handleProfilePhotoChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setFeedback({ tone: "error", message: "Please choose an image file for your profile picture." })
+      event.target.value = ""
+      return
+    }
+
+    if (file.size > MAX_PROFILE_PHOTO_BYTES) {
+      setFeedback({ tone: "error", message: "Profile pictures must be 5 MB or smaller." })
+      event.target.value = ""
+      return
+    }
+
+    setIsUploadingPhoto(true)
+    setFeedback(null)
+
+    try {
+      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg"
+      const filePath = `${userId}/profile.${extension}`
+      const supabase = createSupabaseBrowserClient()
+      const uploadResult = await supabase.storage
+        .from(supabase_config.storageBuckets.profilePhotos)
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: true,
+        })
+
+      if (uploadResult.error) {
+        setFeedback({ tone: "error", message: uploadResult.error.message })
+        return
+      }
+
+      const { data } = supabase.storage
+        .from(supabase_config.storageBuckets.profilePhotos)
+        .getPublicUrl(filePath)
+
+      handleInputChange("avatar", data.publicUrl)
+      setFeedback({ tone: "success", message: "Profile picture uploaded. Save changes to apply it to your profile." })
+    } catch (error) {
+      setFeedback({
+        tone: "error",
+        message: error instanceof Error ? error.message : "We could not upload your profile picture.",
+      })
+    } finally {
+      setIsUploadingPhoto(false)
+      event.target.value = ""
+    }
   }
 
   return (
@@ -105,13 +176,31 @@ export function SettingsForm({ initialData }: SettingsFormProps) {
           <h2 className="text-lg font-semibold text-foreground">Profile Picture</h2>
           <div className="flex items-center gap-4">
             <div
-              className="h-24 w-24 rounded-full border-2 border-border bg-cover bg-center"
+              className="h-24 w-24 rounded-full border-2 border-border bg-cover bg-center bg-muted"
               style={{ backgroundImage: formData.avatar ? `url(${formData.avatar})` : undefined }}
             />
-            <Button variant="outline" className="gap-2" disabled>
-              <Camera className="h-4 w-4" />
-              Picture upload coming soon
-            </Button>
+            <div className="space-y-2">
+              <input
+                ref={photoInputRef}
+                id="profile-photo"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleProfilePhotoChange}
+                disabled={isUploadingPhoto || isSaving}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={isUploadingPhoto || isSaving}
+              >
+                <Camera className="h-4 w-4" />
+                {isUploadingPhoto ? "Uploading..." : "Update Picture"}
+              </Button>
+              <p className="text-xs text-muted-foreground">PNG, JPG, WEBP, and GIF up to 5 MB.</p>
+            </div>
           </div>
         </section>
 
@@ -335,7 +424,7 @@ export function SettingsForm({ initialData }: SettingsFormProps) {
         </section>
 
         <div className="flex gap-3">
-          <Button onClick={handleSave} disabled={isSaving || !isDirty} className="h-12 flex-1 gap-2">
+          <Button onClick={handleSave} disabled={isSaving || isUploadingPhoto || !isDirty} className="h-12 flex-1 gap-2">
             {isSaving ? (
               <>
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
@@ -353,7 +442,7 @@ export function SettingsForm({ initialData }: SettingsFormProps) {
               </>
             )}
           </Button>
-          <Button variant="outline" className="h-12 flex-1 gap-2" onClick={handleDiscard} disabled={!isDirty || isSaving}>
+          <Button variant="outline" className="h-12 flex-1 gap-2" onClick={handleDiscard} disabled={!isDirty || isSaving || isUploadingPhoto}>
             <Undo2 className="h-4 w-4" />
             Discard
           </Button>

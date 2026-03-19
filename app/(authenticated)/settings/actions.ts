@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { getSupabaseServerEnv } from "@/lib/supabase/env"
+import { supabase_config } from "@/lib/supabase/config"
 import { normalizeSettingsFormData, type SettingsFormData } from "@/lib/profile/settings"
 
 type SaveSettingsResult =
@@ -40,6 +42,16 @@ export async function saveSettingsAction(payload: SettingsFormData): Promise<Sav
     return { success: false, message: profileError.message }
   }
 
+  const syncPhoto = await syncPrimaryProfilePhoto({
+    supabase,
+    userId: user.id,
+    avatarUrl: data.avatar,
+  })
+
+  if (!syncPhoto.success) {
+    return syncPhoto
+  }
+
   const syncInstruments = await syncNamedRelations({
     supabase,
     table: "instruments",
@@ -70,6 +82,41 @@ export async function saveSettingsAction(payload: SettingsFormData): Promise<Sav
   revalidatePath("/me")
 
   return { success: true, data }
+}
+
+/**
+ * Ensures the profile_photos table always reflects the latest primary picture
+ * chosen on the settings page while preserving the unique order-0 slot.
+ */
+async function syncPrimaryProfilePhoto({
+  supabase,
+  userId,
+  avatarUrl,
+}: {
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>
+  userId: string
+  avatarUrl: string
+}): Promise<SaveSettingsResult | { success: true }> {
+  if (!avatarUrl) {
+    return { success: true }
+  }
+
+  const { error } = await supabase.from("profile_photos").upsert(
+    {
+      user_id: userId,
+      url: normalizeStoredProfilePhotoUrl(avatarUrl),
+      order: 0,
+    },
+    {
+      onConflict: "user_id,order",
+    },
+  )
+
+  if (error) {
+    return { success: false, message: error.message }
+  }
+
+  return { success: true }
 }
 
 /**
@@ -134,4 +181,20 @@ async function syncNamedRelations({
   }
 
   return { success: true }
+}
+
+/**
+ * Converts a public storage URL back into the underlying object path before it
+ * is stored in `profile_photos`, so the bucket choice stays centralized in
+ * configuration instead of being baked into database rows.
+ */
+function normalizeStoredProfilePhotoUrl(avatarUrl: string) {
+  const { url } = getSupabaseServerEnv()
+  const publicBucketPrefix = `${url}/storage/v1/object/public/${supabase_config.storageBuckets.profilePhotos}/`
+
+  if (avatarUrl.startsWith(publicBucketPrefix)) {
+    return avatarUrl.slice(publicBucketPrefix.length)
+  }
+
+  return avatarUrl
 }

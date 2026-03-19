@@ -1,5 +1,6 @@
 import { SettingsForm } from "@/components/app/settings-form"
 import { toSettingsFormData } from "@/lib/profile/settings"
+import { supabase_config } from "@/lib/supabase/config"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 
 export default async function SettingsPage() {
@@ -8,20 +9,20 @@ export default async function SettingsPage() {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const initialData = toSettingsFormData(await getSettingsPageData(user?.id))
+  if (!user) {
+    return null
+  }
 
-  return <SettingsForm initialData={initialData} />
+  const initialData = toSettingsFormData(await getSettingsPageData(user.id))
+
+  return <SettingsForm initialData={initialData} userId={user.id} />
 }
 
 /**
  * Fetches the full settings payload from the database in one place so the route
  * always opens with live profile data instead of local mock state.
  */
-async function getSettingsPageData(userId: string | undefined) {
-  if (!userId) {
-    return null
-  }
-
+async function getSettingsPageData(userId: string) {
   const supabase = await createSupabaseServerClient()
   const { data: profile } = await supabase
     .from("profiles")
@@ -64,7 +65,7 @@ async function getSettingsPageData(userId: string | undefined) {
     genres: (genreRows ?? [])
       .flatMap((row) => normalizeJoinedName(row.genres))
       .filter(Boolean),
-    avatar: photoRows?.[0]?.url ?? "",
+    avatar: resolveProfilePhotoUrl(supabase, photoRows?.[0]?.url),
   }
 }
 
@@ -78,4 +79,21 @@ function normalizeJoinedName(value: unknown): string[] {
   }
 
   return []
+}
+
+function resolveProfilePhotoUrl(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  photoUrl: string | undefined,
+) {
+  if (!photoUrl) {
+    return ""
+  }
+
+  if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
+    return photoUrl
+  }
+
+  return supabase.storage
+    .from(supabase_config.storageBuckets.profilePhotos)
+    .getPublicUrl(photoUrl).data.publicUrl
 }

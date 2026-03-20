@@ -408,7 +408,7 @@ export default function PostsPage() {
           <div className="mb-6 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-bold text-foreground">Uploaded Videos</h2>
-              <p className="text-sm text-muted-foreground">Your personal post library is loaded directly from Supabase.</p>
+              <p className="text-sm text-muted-foreground">Your personal post library</p>
             </div>
             <div className="rounded-full bg-secondary px-3 py-1 text-sm text-muted-foreground">{posts.length} posts</div>
           </div>

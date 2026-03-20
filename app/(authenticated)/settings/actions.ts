@@ -106,6 +106,7 @@ async function syncPrimaryProfilePhoto({
       user_id: userId,
       url: normalizeStoredProfilePhotoUrl(avatarUrl),
       order: 0,
+      uploaded_at: new Date().toISOString(),
     },
     {
       onConflict: "user_id,order",
@@ -189,12 +190,15 @@ async function syncNamedRelations({
  * configuration instead of being baked into database rows.
  */
 function normalizeStoredProfilePhotoUrl(avatarUrl: string) {
+  const withoutHash = avatarUrl.split("#", 1)[0] ?? avatarUrl
+  const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash
+
   const { url } = getSupabaseServerEnv()
   const publicBucketPrefix = `${url}/storage/v1/object/public/${supabase_config.storageBuckets.profilePhotos}/`
 
-  if (avatarUrl.startsWith(publicBucketPrefix)) {
-    return avatarUrl.slice(publicBucketPrefix.length)
+  if (withoutQuery.startsWith(publicBucketPrefix)) {
+    return withoutQuery.slice(publicBucketPrefix.length)
   }
 
-  return avatarUrl
+  return withoutQuery
 }

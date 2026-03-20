@@ -676,10 +676,6 @@ export default function FeedPage() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="fixed left-4 top-4 z-30 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm sm:left-6 sm:top-6">
-        Feed
-      </div>
-
       <div className="snap-y snap-mandatory">
         {posts.map((post) => (
           <FeedPostCard

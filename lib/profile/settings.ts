@@ -46,6 +46,7 @@ export const LOOKING_FOR = [
 ] as const
 
 export const EXPERIENCE_LEVELS = ["Beginner", "Intermediate", "Expert"] as const
+export const GENDER_OPTIONS = ["Male", "Female", "Other", "Prefer not to say"] as const
 
 export type SettingsFormData = {
   username: string
@@ -94,13 +95,13 @@ export function toSettingsFormData(profile: Partial<SettingsFormData> | null | u
     birthday: profile?.birthday ?? "",
     instruments: uniqueStrings(profile?.instruments),
     genres: uniqueStrings(profile?.genres),
-    gender: profile?.gender ?? "Prefer not to say",
+    gender: sanitizeOption(profile?.gender, GENDER_OPTIONS, "Prefer not to say"),
     youtubeUrl: profile?.youtubeUrl ?? "",
     spotifyUrl: profile?.spotifyUrl ?? "",
     city: profile?.city ?? "",
     lookingFor: uniqueStrings(profile?.lookingFor),
     experienceYears: sanitizeYears(profile?.experienceYears),
-    experienceLevel: profile?.experienceLevel ?? "Intermediate",
+    experienceLevel: sanitizeOption(profile?.experienceLevel, EXPERIENCE_LEVELS, "Intermediate"),
     avatar: profile?.avatar ?? "",
   }
 }
@@ -119,13 +120,13 @@ export function normalizeSettingsFormData(data: SettingsFormData): SettingsFormD
     birthday: data.birthday,
     instruments: [...data.instruments].sort(),
     genres: [...data.genres].sort(),
-    gender: data.gender,
+    gender: sanitizeOption(data.gender, GENDER_OPTIONS, "Prefer not to say"),
     youtubeUrl: data.youtubeUrl.trim(),
     spotifyUrl: data.spotifyUrl.trim(),
     city: data.city.trim(),
     lookingFor: [...data.lookingFor].sort(),
     experienceYears: sanitizeYears(data.experienceYears),
-    experienceLevel: data.experienceLevel,
+    experienceLevel: sanitizeOption(data.experienceLevel, EXPERIENCE_LEVELS, "Intermediate"),
     avatar: data.avatar.trim(),
   }
 }
@@ -140,4 +141,18 @@ function sanitizeYears(value: number | null | undefined) {
   }
 
   return Math.min(100, Math.trunc(value))
+}
+
+function sanitizeOption<T extends readonly string[]>(
+  value: string | null | undefined,
+  allowedValues: T,
+  fallback: T[number],
+): T[number] {
+  if (typeof value !== "string") {
+    return fallback
+  }
+
+  const trimmedValue = value.trim()
+
+  return allowedValues.includes(trimmedValue as T[number]) ? (trimmedValue as T[number]) : fallback
 }

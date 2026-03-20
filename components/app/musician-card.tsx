@@ -19,9 +19,10 @@ interface MusicianCardProps {
   }
   onLike?: () => void
   onPass?: () => void
+  impressionPostId?: string
 }
 
-export function MusicianCard({ musician, onLike, onPass }: MusicianCardProps) {
+export function MusicianCard({ musician, onLike, onPass, impressionPostId }: MusicianCardProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [liked, setLiked] = useState(false)
 
@@ -31,7 +32,10 @@ export function MusicianCard({ musician, onLike, onPass }: MusicianCardProps) {
   }
 
   return (
-    <div className="relative h-full w-full flex items-center justify-center snap-start snap-always">
+    <div
+      className="relative h-full w-full flex items-center justify-center snap-start snap-always"
+      data-feed-post-id={impressionPostId}
+    >
       {/* Card Container */}
       <div className="relative w-full max-w-md mx-auto h-[calc(100vh-8rem)] lg:h-[calc(100vh-4rem)] rounded-2xl overflow-hidden bg-card">
         {/* Background Image */}

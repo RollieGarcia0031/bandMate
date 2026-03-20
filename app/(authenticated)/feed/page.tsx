@@ -1,11 +1,12 @@
 "use client"
 
 import { MusicianCard } from "@/components/app/musician-card"
+import { useFeedImpressionTracker } from "@/lib/feed/use-feed-impression-tracker"
 
 // Mock data - will be replaced with Supabase data
 const mockMusicians = [
   {
-    id: "1",
+    id: "7b4d5a4d-a30c-4dd9-bf4f-6a48651f0f3f",
     name: "Alex Rivera",
     age: 28,
     location: "Los Angeles, CA",
@@ -16,7 +17,7 @@ const mockMusicians = [
     audioPreviewUrl: "/demo.mp3",
   },
   {
-    id: "2",
+    id: "f6af0c89-b8b5-47f6-a72d-eeb928ec8fb9",
     name: "Maya Chen",
     age: 24,
     location: "Brooklyn, NY",
@@ -27,7 +28,7 @@ const mockMusicians = [
     audioPreviewUrl: "/demo.mp3",
   },
   {
-    id: "3",
+    id: "f88860fc-7366-4462-b0be-8958d8e8011c",
     name: "Jordan Brooks",
     age: 31,
     location: "Nashville, TN",
@@ -38,7 +39,7 @@ const mockMusicians = [
     audioPreviewUrl: "/demo.mp3",
   },
   {
-    id: "4",
+    id: "a3bf2710-2f0d-4952-84c5-7e2ced85325a",
     name: "Sam Taylor",
     age: 26,
     location: "Austin, TX",
@@ -49,7 +50,7 @@ const mockMusicians = [
     audioPreviewUrl: "/demo.mp3",
   },
   {
-    id: "5",
+    id: "3dc1f7cc-f73a-46c4-9d0f-8d15dc657463",
     name: "Riley Morgan",
     age: 23,
     location: "Seattle, WA",
@@ -62,6 +63,8 @@ const mockMusicians = [
 ]
 
 export default function FeedPage() {
+  useFeedImpressionTracker({ dwellMs: 1500, minIntersectionRatio: 0.6, source: "feed" })
+
   const handleLike = (musicianId: string) => {
     console.log("Liked:", musicianId)
     // Will be implemented with Supabase
@@ -80,6 +83,7 @@ export default function FeedPage() {
           musician={musician}
           onLike={() => handleLike(musician.id)}
           onPass={() => handlePass(musician.id)}
+          impressionPostId={musician.id}
         />
       ))}
     </div>

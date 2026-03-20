@@ -47,7 +47,7 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
       .eq("user_id", userId),
     supabase
       .from("profile_photos")
-      .select("url, order")
+      .select("url, order, uploaded_at")
       .eq("user_id", userId)
       .order("order", { ascending: true })
       .limit(1),
@@ -65,15 +65,15 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
     birthday,
     age: calculateAge(birthday),
     city: profile?.city ?? "",
-    gender: profile?.gender ?? "",
+    gender: profile?.gender ?? "Prefer not to say",
     youtubeUrl: profile?.youtube_url ?? "",
     spotifyUrl: profile?.spotify_url ?? "",
     lookingFor: profile?.looking_for ?? [],
     experienceYears: profile?.experience_years ?? 0,
-    experienceLevel: profile?.experience_level ?? "",
+    experienceLevel: profile?.experience_level ?? "Intermediate",
     instruments: (instrumentRows ?? []).flatMap((row) => normalizeJoinedName(row.instruments)).filter(Boolean),
     genres: (genreRows ?? []).flatMap((row) => normalizeJoinedName(row.genres)).filter(Boolean),
-    avatar: resolveProfilePhotoUrl(supabase, photoRows?.[0]?.url),
+    avatar: resolveProfilePhotoUrl(supabase, photoRows?.[0]?.url, photoRows?.[0]?.uploaded_at),
     joinedDate: authUser?.created_at ?? profile?.created_at ?? null,
   }
 }
@@ -93,18 +93,27 @@ function normalizeJoinedName(value: unknown): string[] {
 function resolveProfilePhotoUrl(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   photoUrl: string | undefined,
+  uploadedAt: string | null | undefined,
 ) {
   if (!photoUrl) {
     return ""
   }
 
+  const cacheBuster = uploadedAt ? `v=${encodeURIComponent(uploadedAt)}` : ""
+
   if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-    return photoUrl
+    if (!cacheBuster) {
+      return photoUrl
+    }
+
+    return `${photoUrl}${photoUrl.includes("?") ? "&" : "?"}${cacheBuster}`
   }
 
-  return supabase.storage
+  const publicUrl = supabase.storage
     .from(supabase_config.storageBuckets.profilePhotos)
     .getPublicUrl(photoUrl).data.publicUrl
+
+  return cacheBuster ? `${publicUrl}?${cacheBuster}` : publicUrl
 }
 
 function calculateAge(birthday: string) {

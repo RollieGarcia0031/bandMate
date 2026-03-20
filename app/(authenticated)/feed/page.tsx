@@ -49,8 +49,10 @@ type FeedPost = {
   videoReferenceKind: string
   videoError: string | null
   likes: number
+  dislikes: number
   comments: number
   createdAt: string | null
+  viewerSwipeDirection: "like" | "pass" | null
 }
 
 /**
@@ -73,8 +75,10 @@ async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
     normalizedVideoPath: videoDebugInfo.normalizedStoragePath,
     videoReferenceKind: videoDebugInfo.referenceKind,
     likes: row.likes_count ?? 0,
+    dislikes: 0,
     comments: row.comments_count ?? 0,
     createdAt: row.created_at,
+    viewerSwipeDirection: null,
   }
 
   try {
@@ -124,7 +128,38 @@ function formatPlaybackTime(valueInSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`
 }
 
+/**
+ * Horizontal movement required before the card commits a swipe reaction. Any
+ * smaller drag snaps back so taps, playback adjustments, and tiny drifts do
+ * not accidentally like or dislike the video.
+ */
 const SWIPE_THRESHOLD_PX = 120
+
+/**
+ * Apply the viewer's latest swipe locally so the dialog stats stay consistent
+ * with the gesture they just completed. The feed already has server-backed
+ * likes, but it does not yet expose an aggregate dislike counter, so dislikes
+ * are tracked in the client feed model until a dedicated backend count exists.
+ */
+function applyViewerSwipeToPost(post: FeedPost, nextDirection: "like" | "pass") {
+  const previousDirection = post.viewerSwipeDirection
+
+  if (previousDirection === nextDirection) {
+    return post
+  }
+
+  const likeDelta = nextDirection === "like" ? 1 : 0
+  const dislikeDelta = nextDirection === "pass" ? 1 : 0
+  const previousLikeDelta = previousDirection === "like" ? 1 : 0
+  const previousDislikeDelta = previousDirection === "pass" ? 1 : 0
+
+  return {
+    ...post,
+    likes: Math.max(post.likes + likeDelta - previousLikeDelta, 0),
+    dislikes: Math.max(post.dislikes + dislikeDelta - previousDislikeDelta, 0),
+    viewerSwipeDirection: nextDirection,
+  }
+}
 
 type FeedPostCardProps = {
   post: FeedPost
@@ -239,6 +274,10 @@ function FeedPostCard({
     [videoElement],
   )
 
+  /**
+   * Return the card to its resting position and clear the active pointer
+   * bookkeeping after a cancelled, completed, or too-short gesture.
+   */
   const resetSwipeGesture = useCallback((pointerId?: number) => {
     setSwipeOffsetX(0)
     setIsSwiping(false)
@@ -254,6 +293,11 @@ function FeedPostCard({
     }
   }, [])
 
+  /**
+   * Persist the resolved swipe direction once the drag crosses the threshold.
+   * The parent page owns the Supabase write so the card only needs to await the
+   * result and then reset its temporary drag state.
+   */
   const commitSwipeAction = useCallback(
     async (direction: "like" | "pass", pointerId?: number) => {
       if (isSwipeSubmitting) {
@@ -272,6 +316,10 @@ function FeedPostCard({
     [isSwipeSubmitting, onSwipeAction, post.id, resetSwipeGesture],
   )
 
+  /**
+   * Start tracking a possible horizontal swipe unless the interaction began on
+   * an existing control such as a button, range input, or dialog trigger.
+   */
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (isSwipeSubmitting) {
       return
@@ -289,6 +337,11 @@ function FeedPostCard({
     setIsSwiping(true)
   }, [isSwipeSubmitting])
 
+  /**
+   * Update the temporary card offset while the pointer is active so the user
+   * gets immediate visual feedback about whether they are moving toward a like
+   * or a dislike action.
+   */
   const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (swipePointerIdRef.current !== event.pointerId || swipeStartXRef.current === null || isSwipeSubmitting) {
       return
@@ -298,6 +351,10 @@ function FeedPostCard({
     setSwipeOffsetX(nextOffset)
   }, [isSwipeSubmitting])
 
+  /**
+   * Finish the gesture by either snapping back below the threshold or
+   * translating the final horizontal direction into a like/pass action.
+   */
   const handlePointerEnd = useCallback(async (event: ReactPointerEvent<HTMLElement>) => {
     if (swipePointerIdRef.current !== event.pointerId || swipeStartXRef.current === null) {
       return
@@ -548,6 +605,14 @@ function FeedPostCard({
                     </div>
 
                     <div className="flex items-start gap-3">
+                      <Heart className="mt-0.5 h-4 w-4 -scale-x-100 text-muted-foreground" />
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dislikes</p>
+                        <p className="text-sm text-foreground">{post.dislikes}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
                       <Info className="mt-0.5 h-4 w-4 text-muted-foreground" />
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Info</p>
@@ -721,6 +786,10 @@ export default function FeedPage() {
     scrollToPostAtIndex(Math.min(currentIndex + 1, posts.length - 1))
   }, [getCurrentPostIndex, posts.length, scrollToPostAtIndex])
 
+  /**
+   * Save the viewer's swipe, reflect the latest local like/dislike totals in
+   * the details dialog, and then advance the feed to the next video.
+   */
   const handleSwipeAction = useCallback(
     async (postId: string, direction: "like" | "pass") => {
       if (!currentUserId) {
@@ -744,6 +813,10 @@ export default function FeedPage() {
         if (error) {
           throw error
         }
+
+        setPosts((currentPosts) =>
+          currentPosts.map((post) => (post.id === postId ? applyViewerSwipeToPost(post, direction) : post)),
+        )
 
         const currentIndex = posts.findIndex((post) => post.id === postId)
         const nextIndex = Math.min(currentIndex + 1, posts.length - 1)

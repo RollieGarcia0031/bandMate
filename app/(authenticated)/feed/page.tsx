@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { AlertCircle, CalendarDays, Heart, Info, Loader2, Play, UserRound } from "lucide-react"
 import {
   Dialog,
@@ -99,7 +99,14 @@ function formatPostDate(createdAt: string | null) {
   }).format(parsedDate)
 }
 
-function FeedPostCard({ post }: { post: FeedPost }) {
+type FeedPostCardProps = {
+  post: FeedPost
+  registerVideo: (postId: string, element: HTMLVideoElement | null) => void
+  onVideoPlay: (postId: string) => void
+  onVideoPause: (postId: string) => void
+}
+
+function FeedPostCard({ post, registerVideo, onVideoPlay, onVideoPause }: FeedPostCardProps) {
   const [playbackError, setPlaybackError] = useState<string | null>(null)
   const videoError = playbackError ?? post.videoError
   const postedOnLabel = formatPostDate(post.createdAt)
@@ -117,6 +124,16 @@ function FeedPostCard({ post }: { post: FeedPost }) {
               controls
               playsInline
               preload="metadata"
+              ref={(element) => registerVideo(post.id, element)}
+              onPlay={() => {
+                onVideoPlay(post.id)
+              }}
+              onPause={() => {
+                onVideoPause(post.id)
+              }}
+              onEnded={() => {
+                onVideoPause(post.id)
+              }}
               onError={() => {
                 setPlaybackError(
                   [
@@ -248,10 +265,47 @@ export default function FeedPage() {
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null)
+  const videoElementsRef = useRef<Record<string, HTMLVideoElement | null>>({})
+
+  const registerVideo = useCallback((postId: string, element: HTMLVideoElement | null) => {
+    if (element) {
+      videoElementsRef.current[postId] = element
+      return
+    }
+
+    delete videoElementsRef.current[postId]
+  }, [])
+
+  const handleVideoPlay = useCallback((postId: string) => {
+    Object.entries(videoElementsRef.current).forEach(([otherPostId, element]) => {
+      if (otherPostId !== postId && element && !element.paused) {
+        element.pause()
+      }
+    })
+
+    setActiveVideoId(postId)
+  }, [])
+
+  const handleVideoPause = useCallback((postId: string) => {
+    setActiveVideoId((currentVideoId) => (currentVideoId === postId ? null : currentVideoId))
+  }, [])
 
   useEffect(() => {
     void loadFeedPosts()
   }, [])
+
+  useEffect(() => {
+    if (!activeVideoId) {
+      return
+    }
+
+    const activeVideo = videoElementsRef.current[activeVideoId]
+
+    if (!activeVideo) {
+      setActiveVideoId(null)
+    }
+  }, [activeVideoId])
 
   /**
    * Load every public post for the temporary all-videos feed ordered first by
@@ -328,7 +382,13 @@ export default function FeedPage() {
         </header>
 
         {posts.map((post) => (
-          <FeedPostCard key={post.id} post={post} />
+          <FeedPostCard
+            key={post.id}
+            post={post}
+            registerVideo={registerVideo}
+            onVideoPlay={handleVideoPlay}
+            onVideoPause={handleVideoPause}
+          />
         ))}
       </div>
     </div>

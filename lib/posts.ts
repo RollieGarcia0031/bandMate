@@ -5,11 +5,13 @@ export type Visibility = "public" | "private" | "followers"
 
 export type PostRow = {
   id: string
+  user_id?: string
   title: string | null
   description: string | null
   visibility: Visibility | null
   video_url: string
   likes_count: number | null
+  dislikes_count?: number | null
   comments_count: number | null
   created_at: string | null
 }

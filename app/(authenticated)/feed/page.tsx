@@ -19,10 +19,11 @@ type FeedPost = {
   displayName: string
   title: string
   description: string
-  videoUrl: string
+  videoUrl: string | null
   videoReference: string
   normalizedVideoPath: string | null
   videoReferenceKind: string
+  videoError: string | null
 }
 
 /**
@@ -33,56 +34,78 @@ type FeedPost = {
 async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
   const videoDebugInfo = getPostVideoReferenceDebugInfo(row.video_url)
 
+  const basePost = {
+    id: row.id,
+    displayName: row.profiles?.[0]?.display_name?.trim() || "BandMate user",
+    title: row.title?.trim() || "Untitled post",
+    description: row.description?.trim() || "",
+    videoReference: row.video_url,
+    normalizedVideoPath: videoDebugInfo.normalizedStoragePath,
+    videoReferenceKind: videoDebugInfo.referenceKind,
+  }
+
   try {
     return {
-      id: row.id,
-      displayName: row.profiles?.[0]?.display_name?.trim() || "BandMate user",
-      title: row.title?.trim() || "Untitled post",
-      description: row.description?.trim() || "",
+      ...basePost,
       videoUrl: await resolvePostVideoUrl(row.video_url),
-      videoReference: row.video_url,
-      normalizedVideoPath: videoDebugInfo.normalizedStoragePath,
-      videoReferenceKind: videoDebugInfo.referenceKind,
+      videoError: null,
     }
   } catch (error) {
-    throw new Error(
-      [
-        `Feed video failed to resolve for post ${row.id}.`,
+    return {
+      ...basePost,
+      videoUrl: null,
+      videoError: [
+        `Video URL resolution failed for post ${row.id}.`,
         error instanceof Error ? error.message : "Unknown video resolution error.",
       ].join(" "),
-    )
+    }
   }
 }
 
 function FeedPostCard({ post }: { post: FeedPost }) {
-  const [videoError, setVideoError] = useState<string | null>(null)
+  const [playbackError, setPlaybackError] = useState<string | null>(null)
+  const videoError = playbackError ?? post.videoError
 
   return (
     <article className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <div className="relative bg-secondary">
-        <video
-          src={post.videoUrl}
-          className="aspect-[9/16] w-full bg-black object-contain"
-          controls
-          playsInline
-          preload="metadata"
-          onError={() => {
-            setVideoError(
-              [
-                `Video playback failed for post ${post.id}.`,
-                `referenceKind=${post.videoReferenceKind}`,
-                `storedVideoUrl=${JSON.stringify(post.videoReference)}`,
-                `normalizedStoragePath=${JSON.stringify(post.normalizedVideoPath)}`,
-                `resolvedVideoUrl=${JSON.stringify(post.videoUrl)}`,
-                `Check that this object exists in the configured Supabase bucket and that the signed URL matches the stored path.`,
-              ].join(" "),
-            )
-          }}
-        />
-        <div className="pointer-events-none absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
-          <Play className="h-3.5 w-3.5 fill-white" />
-          Video
-        </div>
+        {post.videoUrl ? (
+          <>
+            <video
+              src={post.videoUrl}
+              className="aspect-[9/16] w-full bg-black object-contain"
+              controls
+              playsInline
+              preload="metadata"
+              onError={() => {
+                setPlaybackError(
+                  [
+                    `Video playback failed for post ${post.id}.`,
+                    `referenceKind=${post.videoReferenceKind}`,
+                    `storedVideoUrl=${JSON.stringify(post.videoReference)}`,
+                    `normalizedStoragePath=${JSON.stringify(post.normalizedVideoPath)}`,
+                    `resolvedVideoUrl=${JSON.stringify(post.videoUrl)}`,
+                    `Check that this object exists in the configured Supabase bucket and that the signed URL matches the stored path.`,
+                  ].join(" "),
+                )
+              }}
+            />
+            <div className="pointer-events-none absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
+              <Play className="h-3.5 w-3.5 fill-white" />
+              Video
+            </div>
+          </>
+        ) : (
+          <div className="flex aspect-[9/16] w-full items-center justify-center bg-black/90 p-6 text-center">
+            <div className="max-w-md space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full bg-destructive/20 px-3 py-1 text-xs font-medium text-destructive">
+                <AlertCircle className="h-3.5 w-3.5" />
+                Video unavailable
+              </div>
+              <p className="text-sm text-muted-foreground">This post stayed in the feed, but its video URL could not be resolved.</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="space-y-3 p-4 lg:p-5">

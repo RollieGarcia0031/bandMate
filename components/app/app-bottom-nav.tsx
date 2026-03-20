@@ -2,14 +2,14 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Home, Search, MessageCircle, User } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Home, Search, MessageCircle, User, Video } from "lucide-react"
 
 const navItems = [
   { href: "/feed", label: "Feed", icon: Home },
   { href: "/search", label: "Search", icon: Search },
   { href: "/inbox", label: "Inbox", icon: MessageCircle },
   { href: "/me", label: "Me", icon: User },
+  { href: "/posts", label: "Posts", icon: Video },
 ]
 
 export function AppBottomNav() {
@@ -24,14 +24,15 @@ export function AppBottomNav() {
             <li key={item.href} className="flex-1">
               <Link
                 href={item.href}
-                className={cn(
-                  "flex flex-col items-center justify-center gap-1 py-2 transition-colors",
-                  isActive
+                className={`
+                  flex flex-col items-center justify-center gap-1 py-2 transition-colors
+                  ${isActive
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
-                )}
+                  }
+                `}
               >
-                <item.icon className={cn("w-6 h-6", isActive && "scale-110")} />
+                <item.icon className={`w-6 h-6 ${isActive && "scale-110"}`} />
                 <span className="text-xs font-medium">{item.label}</span>
               </Link>
             </li>

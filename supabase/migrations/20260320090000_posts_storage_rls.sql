@@ -27,14 +27,17 @@ COMMENT ON FUNCTION public.user_posts_bucket() IS
 ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
 
 -- =============================================================================
--- posts: each authenticated user manages only their own uploaded post rows.
+-- posts: write operations stay owner-scoped, while feed reads for public posts
+-- use a dedicated policy so follower-only access can be added later in a
+-- separate policy or RPC instead of expanding owner-only rules.
 -- =============================================================================
 DROP POLICY IF EXISTS posts_select_own ON public.posts;
-CREATE POLICY posts_select_own
+DROP POLICY IF EXISTS posts_select_public_feed ON public.posts;
+CREATE POLICY posts_select_public_feed
 ON public.posts
 FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id);
+USING (visibility = 'public');
 
 DROP POLICY IF EXISTS posts_insert_own ON public.posts;
 CREATE POLICY posts_insert_own

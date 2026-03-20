@@ -136,6 +136,8 @@ export default function PostsPage() {
       const { data, error } = await supabase
         .from("posts")
         .select("id, title, description, visibility, video_url, likes_count, comments_count, created_at")
+        // Keep this owner filter even with broader feed-read policies so this
+        // personal library view never mixes in other users' public posts.
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
 

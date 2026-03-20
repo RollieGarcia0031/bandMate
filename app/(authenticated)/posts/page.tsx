@@ -4,21 +4,9 @@ import { useEffect, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Globe, Loader2, Lock, MessageCircle, Play, Upload, Users, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { type PostRow, resolvePostVideoUrl, type Visibility } from "@/lib/posts"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { supabase_config } from "@/lib/supabase/config"
-
-type Visibility = "public" | "private" | "followers"
-
-type PostRow = {
-  id: string
-  title: string | null
-  description: string | null
-  visibility: Visibility | null
-  video_url: string
-  likes_count: number | null
-  comments_count: number | null
-  created_at: string | null
-}
 
 type Post = {
   id: string
@@ -44,28 +32,6 @@ function formatPostCreatedAt(createdAt: string | null) {
   }
 
   return formatDistanceToNow(new Date(createdAt), { addSuffix: true })
-}
-
-/**
- * The posts table stores the uploaded video reference. New uploads save the
- * storage path, but older rows may already contain a full URL, so the page
- * supports both shapes during the migration to storage-backed uploads.
- */
-async function resolvePostVideoUrl(videoReference: string) {
-  if (/^https?:\/\//i.test(videoReference)) {
-    return videoReference
-  }
-
-  const supabase = createSupabaseBrowserClient()
-  const { data, error } = await supabase.storage
-    .from(USER_POSTS_BUCKET)
-    .createSignedUrl(videoReference, 60 * 60)
-
-  if (error) {
-    throw error
-  }
-
-  return data.signedUrl
 }
 
 /**

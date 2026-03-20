@@ -10,6 +10,7 @@ export type PostRow = {
   visibility: Visibility | null
   video_url: string
   likes_count: number | null
+  dislikes_count?: number | null
   comments_count: number | null
   created_at: string | null
 }

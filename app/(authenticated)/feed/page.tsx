@@ -75,7 +75,7 @@ async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
     normalizedVideoPath: videoDebugInfo.normalizedStoragePath,
     videoReferenceKind: videoDebugInfo.referenceKind,
     likes: row.likes_count ?? 0,
-    dislikes: 0,
+    dislikes: row.dislikes_count ?? 0,
     comments: row.comments_count ?? 0,
     createdAt: row.created_at,
     viewerSwipeDirection: null,
@@ -137,9 +137,9 @@ const SWIPE_THRESHOLD_PX = 120
 
 /**
  * Apply the viewer's latest swipe locally so the dialog stats stay consistent
- * with the gesture they just completed. The feed already has server-backed
- * likes, but it does not yet expose an aggregate dislike counter, so dislikes
- * are tracked in the client feed model until a dedicated backend count exists.
+ * with the gesture they just completed. The database is the source of truth
+ * for reaction counts, while this helper keeps the current client view in sync
+ * immediately after a successful swipe write and before the next refetch.
  */
 function applyViewerSwipeToPost(post: FeedPost, nextDirection: "like" | "pass") {
   const previousDirection = post.viewerSwipeDirection
@@ -895,7 +895,7 @@ export default function FeedPage() {
       const supabase = createSupabaseBrowserClient()
       const { data, error } = await supabase
         .from("posts")
-        .select("id, title, description, visibility, video_url, likes_count, comments_count, created_at, profiles!inner(display_name, username)")
+        .select("id, title, description, visibility, video_url, likes_count, dislikes_count, comments_count, created_at, profiles!inner(display_name, username)")
         .eq("visibility", "public")
         .order("created_at", { ascending: false })
         .order("likes_count", { ascending: false })

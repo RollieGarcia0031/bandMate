@@ -160,6 +160,9 @@ Notes:
   - `visibility IN ('public', 'followers', 'private')`
 - Trigger:
   - `trig_posts_updated_at` updates `updated_at` on row update.
+- Authenticated `/posts` page integration:
+  - uploads store videos in the Supabase Storage bucket configured by `app.user_posts_bucket` (default `user-posts`) under `<auth.uid()>/<uuid>.<ext>`.
+  - row-level security policies limit post row and storage object access to the owning authenticated user.
 
 ### `swipes`
 - Purpose: reaction from a user to a post.

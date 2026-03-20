@@ -2,14 +2,14 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Home, Search, MessageCircle, User, Music2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Home, Search, MessageCircle, User, Music2, Video } from "lucide-react"
 
 const navItems = [
   { href: "/feed", label: "Feed", icon: Home },
   { href: "/search", label: "Search", icon: Search },
   { href: "/inbox", label: "Inbox", icon: MessageCircle },
   { href: "/me", label: "Me", icon: User },
+  { href: "/posts", label: "Posts", icon: Video },
 ]
 
 export function AppSidebar() {
@@ -34,12 +34,13 @@ export function AppSidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={cn(
-                    "flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200",
-                    isActive
+                  className={`
+                    flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200
+                    ${isActive
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  )}
+                    }
+                  `}
                 >
                   <item.icon className="w-6 h-6" />
                   <span className="text-lg font-medium">{item.label}</span>

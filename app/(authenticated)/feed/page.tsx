@@ -39,6 +39,7 @@ type FeedPostRow = PostRow & {
 
 type FeedPost = {
   id: string
+  ownerUserId: string | null
   displayName: string
   username: string | null
   title: string
@@ -67,6 +68,7 @@ async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
 
   const basePost = {
     id: row.id,
+    ownerUserId: row.user_id ?? null,
     displayName: profile?.display_name?.trim() || fallbackUsername || "BandMate user",
     username: fallbackUsername,
     title: row.title?.trim() || "Untitled post",
@@ -140,6 +142,9 @@ const SWIPE_THRESHOLD_PX = 120
  * with the gesture they just completed. The database is the source of truth
  * for reaction counts, while this helper keeps the current client view in sync
  * immediately after a successful swipe write and before the next refetch.
+ *
+ * The same feed row can move between "like" and "pass" over time, so this
+ * helper carefully removes any previous local delta before applying the new one.
  */
 function applyViewerSwipeToPost(post: FeedPost, nextDirection: "like" | "pass") {
   const previousDirection = post.viewerSwipeDirection
@@ -789,11 +794,22 @@ export default function FeedPage() {
   /**
    * Save the viewer's swipe, reflect the latest local like/dislike totals in
    * the details dialog, and then advance the feed to the next video.
+   *
+   * Protection note: the database enforces "no self-swipes" in a dedicated
+   * migration trigger, and this client-side guard prevents the UI from even
+   * attempting to submit a swipe when the current user owns the visible post.
    */
   const handleSwipeAction = useCallback(
     async (postId: string, direction: "like" | "pass") => {
       if (!currentUserId) {
         setPageError("You need to be signed in to swipe on videos.")
+        return
+      }
+
+      const targetPost = posts.find((post) => post.id === postId)
+
+      if (targetPost?.ownerUserId === currentUserId) {
+        setPageError("You cannot swipe on your own post.")
         return
       }
 
@@ -835,20 +851,18 @@ export default function FeedPage() {
   )
 
   useEffect(() => {
-    void loadFeedPosts()
-  }, [])
-
-  useEffect(() => {
-    async function loadCurrentUser() {
+    async function loadViewerAndFeed() {
       const supabase = createSupabaseBrowserClient()
       const {
         data: { user },
       } = await supabase.auth.getUser()
 
       setCurrentUserId(user?.id ?? null)
+
+      await loadFeedPosts(user?.id ?? null)
     }
 
-    void loadCurrentUser()
+    void loadViewerAndFeed()
   }, [])
 
   useEffect(() => {
@@ -886,19 +900,28 @@ export default function FeedPage() {
   /**
    * Load every public post for the temporary all-videos feed ordered first by
    * newest uploads, then by like totals when timestamps are equal.
+   *
+   * Protection note: the query excludes the signed-in viewer's own posts so
+   * they never appear as swipeable cards on the client in the first place.
    */
-  async function loadFeedPosts() {
+  async function loadFeedPosts(viewerUserId: string | null) {
     setIsLoading(true)
     setPageError(null)
 
     try {
       const supabase = createSupabaseBrowserClient()
-      const { data, error } = await supabase
+      let query = supabase
         .from("posts")
-        .select("id, title, description, visibility, video_url, likes_count, dislikes_count, comments_count, created_at, profiles!inner(display_name, username)")
+        .select("id, user_id, title, description, visibility, video_url, likes_count, dislikes_count, comments_count, created_at, profiles!inner(display_name, username)")
         .eq("visibility", "public")
         .order("created_at", { ascending: false })
         .order("likes_count", { ascending: false })
+
+      if (viewerUserId) {
+        query = query.neq("user_id", viewerUserId)
+      }
+
+      const { data, error } = await query
 
       if (error) {
         throw error

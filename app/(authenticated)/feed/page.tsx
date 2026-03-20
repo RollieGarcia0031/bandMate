@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import {
   AlertCircle,
   CalendarDays,
@@ -124,15 +124,25 @@ function formatPlaybackTime(valueInSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`
 }
 
+const SWIPE_THRESHOLD_PX = 120
+
 type FeedPostCardProps = {
   post: FeedPost
   registerPost: (postId: string, element: HTMLElement | null) => void
   registerVideo: (postId: string, element: HTMLVideoElement | null) => void
   onVideoPlay: (postId: string) => void
   onVideoPause: (postId: string) => void
+  onSwipeAction: (postId: string, direction: "like" | "pass") => Promise<void>
 }
 
-function FeedPostCard({ post, registerPost, registerVideo, onVideoPlay, onVideoPause }: FeedPostCardProps) {
+function FeedPostCard({
+  post,
+  registerPost,
+  registerVideo,
+  onVideoPlay,
+  onVideoPause,
+  onSwipeAction,
+}: FeedPostCardProps) {
   const [playbackError, setPlaybackError] = useState<string | null>(null)
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -140,9 +150,16 @@ function FeedPostCard({ post, registerPost, registerVideo, onVideoPlay, onVideoP
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
+  const [swipeOffsetX, setSwipeOffsetX] = useState(0)
+  const [isSwiping, setIsSwiping] = useState(false)
+  const [isSwipeSubmitting, setIsSwipeSubmitting] = useState(false)
+  const swipeStartXRef = useRef<number | null>(null)
+  const swipePointerIdRef = useRef<number | null>(null)
   const videoError = playbackError ?? post.videoError
   const postedOnLabel = formatPostDate(post.createdAt)
   const descriptionText = post.description || "No description provided."
+  const swipeProgress = Math.min(Math.abs(swipeOffsetX) / SWIPE_THRESHOLD_PX, 1)
+  const swipeDirectionLabel = swipeOffsetX > 0 ? "Like" : swipeOffsetX < 0 ? "Dislike" : null
 
   const handleVideoRef = useCallback(
     (element: HTMLVideoElement | null) => {
@@ -222,9 +239,137 @@ function FeedPostCard({ post, registerPost, registerVideo, onVideoPlay, onVideoP
     [videoElement],
   )
 
+  const resetSwipeGesture = useCallback((pointerId?: number) => {
+    setSwipeOffsetX(0)
+    setIsSwiping(false)
+    swipeStartXRef.current = null
+
+    if (typeof pointerId === "number" && swipePointerIdRef.current === pointerId) {
+      swipePointerIdRef.current = null
+      return
+    }
+
+    if (typeof pointerId !== "number") {
+      swipePointerIdRef.current = null
+    }
+  }, [])
+
+  const commitSwipeAction = useCallback(
+    async (direction: "like" | "pass", pointerId?: number) => {
+      if (isSwipeSubmitting) {
+        return
+      }
+
+      setIsSwipeSubmitting(true)
+
+      try {
+        await onSwipeAction(post.id, direction)
+      } finally {
+        setIsSwipeSubmitting(false)
+        resetSwipeGesture(pointerId)
+      }
+    },
+    [isSwipeSubmitting, onSwipeAction, post.id, resetSwipeGesture],
+  )
+
+  const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (isSwipeSubmitting) {
+      return
+    }
+
+    const target = event.target as HTMLElement | null
+
+    if (target?.closest("button, input, a, [role='dialog'], [data-no-swipe='true']")) {
+      return
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId)
+    swipeStartXRef.current = event.clientX
+    swipePointerIdRef.current = event.pointerId
+    setIsSwiping(true)
+  }, [isSwipeSubmitting])
+
+  const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (swipePointerIdRef.current !== event.pointerId || swipeStartXRef.current === null || isSwipeSubmitting) {
+      return
+    }
+
+    const nextOffset = event.clientX - swipeStartXRef.current
+    setSwipeOffsetX(nextOffset)
+  }, [isSwipeSubmitting])
+
+  const handlePointerEnd = useCallback(async (event: ReactPointerEvent<HTMLElement>) => {
+    if (swipePointerIdRef.current !== event.pointerId || swipeStartXRef.current === null) {
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    const finalOffset = event.clientX - swipeStartXRef.current
+
+    if (Math.abs(finalOffset) < SWIPE_THRESHOLD_PX) {
+      resetSwipeGesture(event.pointerId)
+      return
+    }
+
+    await commitSwipeAction(finalOffset > 0 ? "like" : "pass", event.pointerId)
+  }, [commitSwipeAction, resetSwipeGesture])
+
+  const handlePointerCancel = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (swipePointerIdRef.current !== event.pointerId) {
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    resetSwipeGesture(event.pointerId)
+  }, [resetSwipeGesture])
+
   return (
-    <article ref={(element) => registerPost(post.id, element)} className="relative h-[100svh] snap-start overflow-hidden bg-black">
+    <article
+      ref={(element) => registerPost(post.id, element)}
+      className="relative h-[100svh] snap-start overflow-hidden bg-black touch-pan-y"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(event) => {
+        void handlePointerEnd(event)
+      }}
+      onPointerCancel={handlePointerCancel}
+      style={{
+        transform: `translateX(${swipeOffsetX}px) rotate(${swipeOffsetX * 0.02}deg)`,
+        transition: isSwiping ? undefined : "transform 180ms ease-out",
+      }}
+    >
       <div className="relative flex h-full w-full items-center justify-center bg-black">
+        <div className="pointer-events-none absolute inset-0 z-10">
+          <div
+            className={cn(
+              "absolute inset-y-0 left-0 flex w-40 items-center justify-center bg-emerald-500/20 text-emerald-200 transition-opacity",
+              swipeOffsetX > 0 ? "opacity-100" : "opacity-0",
+            )}
+            style={{ opacity: swipeOffsetX > 0 ? swipeProgress : 0 }}
+          >
+            <div className="rounded-full border border-emerald-200/60 bg-black/40 px-4 py-2 text-sm font-semibold uppercase tracking-[0.2em]">
+              Like
+            </div>
+          </div>
+          <div
+            className={cn(
+              "absolute inset-y-0 right-0 flex w-40 items-center justify-center bg-rose-500/20 text-rose-200 transition-opacity",
+              swipeOffsetX < 0 ? "opacity-100" : "opacity-0",
+            )}
+            style={{ opacity: swipeOffsetX < 0 ? swipeProgress : 0 }}
+          >
+            <div className="rounded-full border border-rose-200/60 bg-black/40 px-4 py-2 text-sm font-semibold uppercase tracking-[0.2em]">
+              Dislike
+            </div>
+          </div>
+        </div>
+
         {post.videoUrl ? (
           <>
             <video
@@ -348,6 +493,11 @@ function FeedPostCard({ post, registerPost, registerVideo, onVideoPlay, onVideoP
         ) : null}
 
         <div className="absolute inset-x-0 bottom-0 z-20 space-y-4 p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-[0.2em] text-white/70">
+            <span>Swipe right to like</span>
+            <span>{swipeDirectionLabel ? `${swipeDirectionLabel} video` : "Swipe left to dislike"}</span>
+          </div>
+
           <div className="flex items-end justify-between gap-4">
             <h2 className="max-w-2xl text-2xl font-semibold text-white drop-shadow-sm sm:text-3xl">{post.title}</h2>
 
@@ -448,6 +598,7 @@ export default function FeedPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [pageError, setPageError] = useState<string | null>(null)
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const videoElementsRef = useRef<Record<string, HTMLVideoElement | null>>({})
   const postElementsRef = useRef<Record<string, HTMLElement | null>>({})
 
@@ -570,8 +721,61 @@ export default function FeedPage() {
     scrollToPostAtIndex(Math.min(currentIndex + 1, posts.length - 1))
   }, [getCurrentPostIndex, posts.length, scrollToPostAtIndex])
 
+  const handleSwipeAction = useCallback(
+    async (postId: string, direction: "like" | "pass") => {
+      if (!currentUserId) {
+        setPageError("You need to be signed in to swipe on videos.")
+        return
+      }
+
+      setPageError(null)
+
+      try {
+        const supabase = createSupabaseBrowserClient()
+        const { error } = await supabase.from("swipes").upsert(
+          {
+            user_id: currentUserId,
+            post_id: postId,
+            direction,
+          },
+          { onConflict: "user_id,post_id" },
+        )
+
+        if (error) {
+          throw error
+        }
+
+        const currentIndex = posts.findIndex((post) => post.id === postId)
+        const nextIndex = Math.min(currentIndex + 1, posts.length - 1)
+
+        if (nextIndex !== currentIndex) {
+          scrollToPostAtIndex(nextIndex)
+          return
+        }
+
+        void playVideoById(postId)
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "We could not save your swipe.")
+      }
+    },
+    [currentUserId, playVideoById, posts, scrollToPostAtIndex],
+  )
+
   useEffect(() => {
     void loadFeedPosts()
+  }, [])
+
+  useEffect(() => {
+    async function loadCurrentUser() {
+      const supabase = createSupabaseBrowserClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      setCurrentUserId(user?.id ?? null)
+    }
+
+    void loadCurrentUser()
   }, [])
 
   useEffect(() => {
@@ -685,6 +889,7 @@ export default function FeedPage() {
             registerVideo={registerVideo}
             onVideoPlay={handleVideoPlay}
             onVideoPause={handleVideoPause}
+            onSwipeAction={handleSwipeAction}
           />
         ))}
       </div>

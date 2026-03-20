@@ -11,6 +11,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { supabase_config } from "@/lib/supabase/config"
 import {
   EXPERIENCE_LEVELS,
+  GENDER_OPTIONS,
   GENRES,
   INSTRUMENTS,
   LOOKING_FOR,
@@ -130,7 +131,7 @@ export function SettingsForm({ initialData, userId }: SettingsFormProps) {
         .from(supabase_config.storageBuckets.profilePhotos)
         .getPublicUrl(filePath)
 
-      handleInputChange("avatar", data.publicUrl)
+      handleInputChange("avatar", `${data.publicUrl}?v=${Date.now()}`)
       setFeedback({ tone: "success", message: "Profile picture uploaded. Save changes to apply it to your profile." })
     } catch (error) {
       setFeedback({
@@ -263,10 +264,11 @@ export function SettingsForm({ initialData, userId }: SettingsFormProps) {
                 onChange={(event) => handleInputChange("gender", event.target.value)}
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
-                <option value="Prefer not to say">Prefer not to say</option>
+                {GENDER_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

@@ -1,89 +1,161 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
+import { Loader2 } from "lucide-react"
 import { MusicianCard } from "@/components/app/musician-card"
 import { useFeedImpressionTracker } from "@/lib/feed/use-feed-impression-tracker"
+import { type FeedPostCard, loadFeedPosts } from "@/lib/feed/feed-posts"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 
-// Mock data - will be replaced with Supabase data
-const mockMusicians = [
-  {
-    id: "7b4d5a4d-a30c-4dd9-bf4f-6a48651f0f3f",
-    name: "Alex Rivera",
-    age: 28,
-    location: "Los Angeles, CA",
-    instruments: ["Guitar", "Vocals"],
-    genres: ["Rock", "Indie", "Alternative"],
-    bio: "Lead guitarist looking for a band that's ready to tour. 10 years of experience playing everything from small clubs to festival stages. Let's make some noise!",
-    imageUrl: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=800&h=1200&fit=crop",
-    audioPreviewUrl: "/demo.mp3",
-  },
-  {
-    id: "f6af0c89-b8b5-47f6-a72d-eeb928ec8fb9",
-    name: "Maya Chen",
-    age: 24,
-    location: "Brooklyn, NY",
-    instruments: ["Piano", "Synth", "Production"],
-    genres: ["Electronic", "Pop", "R&B"],
-    bio: "Producer and keys player with a home studio setup. Looking to collaborate with vocalists and other producers. Let's create something unique together.",
-    imageUrl: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&h=1200&fit=crop",
-    audioPreviewUrl: "/demo.mp3",
-  },
-  {
-    id: "f88860fc-7366-4462-b0be-8958d8e8011c",
-    name: "Jordan Brooks",
-    age: 31,
-    location: "Nashville, TN",
-    instruments: ["Drums", "Percussion"],
-    genres: ["Country", "Rock", "Blues"],
-    bio: "Session drummer with 15 years behind the kit. Played on multiple albums and toured with several acts. Looking for my next musical adventure.",
-    imageUrl: "https://images.unsplash.com/photo-1519892300165-cb5542fb47c7?w=800&h=1200&fit=crop",
-    audioPreviewUrl: "/demo.mp3",
-  },
-  {
-    id: "a3bf2710-2f0d-4952-84c5-7e2ced85325a",
-    name: "Sam Taylor",
-    age: 26,
-    location: "Austin, TX",
-    instruments: ["Bass", "Double Bass"],
-    genres: ["Jazz", "Funk", "Soul"],
-    bio: "Groove-oriented bassist who lives for the pocket. Equally comfortable in a jazz trio or a funk band. Looking for players who appreciate the low end.",
-    imageUrl: "https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=800&h=1200&fit=crop",
-    audioPreviewUrl: "/demo.mp3",
-  },
-  {
-    id: "3dc1f7cc-f73a-46c4-9d0f-8d15dc657463",
-    name: "Riley Morgan",
-    age: 23,
-    location: "Seattle, WA",
-    instruments: ["Vocals", "Songwriting"],
-    genres: ["Folk", "Indie", "Acoustic"],
-    bio: "Singer-songwriter with a passion for storytelling. Looking for instrumentalists to bring my songs to life on stage. Coffee shop gigs to arena dreams.",
-    imageUrl: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=800&h=1200&fit=crop",
-    audioPreviewUrl: "/demo.mp3",
-  },
-]
+type SwipeDirection = "like" | "pass"
 
 export default function FeedPage() {
+  const [feedPosts, setFeedPosts] = useState<FeedPostCard[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [pageError, setPageError] = useState<string | null>(null)
+  const [pendingSwipePostIds, setPendingSwipePostIds] = useState<string[]>([])
+
   useFeedImpressionTracker({ dwellMs: 1500, minIntersectionRatio: 0.6, source: "feed" })
 
-  const handleLike = (musicianId: string) => {
-    console.log("Liked:", musicianId)
-    // Will be implemented with Supabase
+  useEffect(() => {
+    void refreshFeed()
+  }, [])
+
+  const visibleFeedPosts = useMemo(
+    () => feedPosts.filter((post) => !pendingSwipePostIds.includes(post.id)),
+    [feedPosts, pendingSwipePostIds]
+  )
+
+  async function refreshFeed() {
+    setIsLoading(true)
+    setPageError(null)
+
+    try {
+      const posts = await loadFeedPosts()
+      setFeedPosts(posts)
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "We could not load your feed right now.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const handlePass = (musicianId: string) => {
-    console.log("Passed:", musicianId)
-    // Will be implemented with Supabase
+  /**
+   * Persist the viewer's reaction and optimistically remove the card from the
+   * current stack. The feed ranking itself stays simple in `loadFeedPosts()`: a
+   * swipe removes the post from future fetches, while impressions only soften
+   * its priority if the user saw it but did not react yet.
+   */
+  async function handleSwipe(postId: string, direction: SwipeDirection) {
+    setPendingSwipePostIds((current) => [...current, postId])
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
+
+      if (userError) {
+        throw userError
+      }
+
+      if (!user) {
+        throw new Error("You must be signed in to swipe on feed posts.")
+      }
+
+      const { error } = await supabase.from("swipes").upsert(
+        {
+          user_id: user.id,
+          post_id: postId,
+          direction,
+        },
+        {
+          onConflict: "user_id,post_id",
+        }
+      )
+
+      if (error) {
+        throw error
+      }
+
+      setFeedPosts((current) => current.filter((post) => post.id !== postId))
+      setPageError(null)
+    } catch (error) {
+      setPendingSwipePostIds((current) => current.filter((currentPostId) => currentPostId !== postId))
+      setPageError(error instanceof Error ? error.message : "We could not save your swipe.")
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6 text-center">
+        <div className="space-y-4">
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+          <div>
+            <p className="text-lg font-semibold">Loading your feed</p>
+            <p className="text-sm text-muted-foreground">
+              We&apos;re prioritizing fresh posts from other musicians that you have not swiped on yet.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (pageError && visibleFeedPosts.length === 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6 text-center">
+        <div className="max-w-md space-y-4">
+          <h1 className="text-2xl font-semibold">We couldn&apos;t load the feed</h1>
+          <p className="text-sm text-muted-foreground">{pageError}</p>
+          <button
+            onClick={() => void refreshFeed()}
+            className="rounded-full bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (visibleFeedPosts.length === 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6 text-center">
+        <div className="max-w-lg space-y-4">
+          <h1 className="text-2xl font-semibold">You&apos;re caught up</h1>
+          <p className="text-sm text-muted-foreground">
+            Right now there are no public posts from other musicians that are both visible to you and still unswiped.
+            Once someone new shares a post, or after you clear old reactions during future tooling work, it will appear here.
+          </p>
+          {pageError ? <p className="text-xs text-destructive">{pageError}</p> : null}
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="h-screen overflow-y-scroll snap-y snap-mandatory scrollbar-hide">
-      {mockMusicians.map((musician) => (
+      {visibleFeedPosts.map((post) => (
         <MusicianCard
-          key={musician.id}
-          musician={musician}
-          onLike={() => handleLike(musician.id)}
-          onPass={() => handlePass(musician.id)}
-          impressionPostId={musician.id}
+          key={post.id}
+          musician={{
+            id: post.authorId,
+            name: post.authorName,
+            age: post.age,
+            location: post.location,
+            instruments: post.instruments,
+            genres: post.genres,
+            bio: post.postBody,
+            imageUrl: post.imageUrl,
+            postTitle: post.postTitle,
+            postCreatedAt: post.createdAt,
+            hasBeenSeen: post.hasBeenSeen,
+          }}
+          onLike={() => void handleSwipe(post.id, "like")}
+          onPass={() => void handleSwipe(post.id, "pass")}
+          impressionPostId={post.id}
         />
       ))}
     </div>

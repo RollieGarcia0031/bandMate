@@ -9,13 +9,16 @@ interface MusicianCardProps {
   musician: {
     id: string
     name: string
-    age: number
+    age: number | null
     location: string
     instruments: string[]
     genres: string[]
     bio: string
     imageUrl: string
     audioPreviewUrl?: string
+    postTitle?: string
+    postCreatedAt?: string | null
+    hasBeenSeen?: boolean
   }
   onLike?: () => void
   onPass?: () => void
@@ -39,9 +42,9 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
       {/* Card Container */}
       <div className="relative w-full max-w-md mx-auto h-[calc(100vh-8rem)] lg:h-[calc(100vh-4rem)] rounded-2xl overflow-hidden bg-card">
         {/* Background Image */}
-        <div 
+        <div
           className="absolute inset-0 bg-cover bg-center"
-          style={{ 
+          style={{
             backgroundImage: `url(${musician.imageUrl})`,
           }}
         >
@@ -53,10 +56,28 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
         <div className="absolute inset-0 flex flex-col justify-end p-6">
           {/* Info Section */}
           <div className="space-y-4">
+            {(musician.postTitle || musician.postCreatedAt || musician.hasBeenSeen) && (
+              <div className="space-y-2">
+                {musician.postTitle ? (
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-primary/90">Post</p>
+                    <h2 className="text-2xl font-semibold text-foreground">{musician.postTitle}</h2>
+                  </div>
+                ) : null}
+
+                {(musician.postCreatedAt || musician.hasBeenSeen) && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    {musician.postCreatedAt ? <span>Shared {formatFeedTimestamp(musician.postCreatedAt)}</span> : null}
+                    {musician.hasBeenSeen ? <span>Seen before</span> : <span>New for you</span>}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Name and Age */}
             <div className="flex items-end gap-3">
-              <h2 className="text-3xl font-bold text-foreground">{musician.name}</h2>
-              <span className="text-2xl text-muted-foreground">{musician.age}</span>
+              <h3 className="text-3xl font-bold text-foreground">{musician.name}</h3>
+              {musician.age !== null ? <span className="text-2xl text-muted-foreground">{musician.age}</span> : null}
             </div>
 
             {/* Location */}
@@ -66,33 +87,35 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
             </div>
 
             {/* Instruments */}
-            <div className="flex flex-wrap gap-2">
-              {musician.instruments.map((instrument) => (
-                <span
-                  key={instrument}
-                  className="px-3 py-1 text-xs font-medium rounded-full bg-primary/20 text-primary"
-                >
-                  {instrument}
-                </span>
-              ))}
-            </div>
+            {musician.instruments.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {musician.instruments.map((instrument) => (
+                  <span
+                    key={instrument}
+                    className="px-3 py-1 text-xs font-medium rounded-full bg-primary/20 text-primary"
+                  >
+                    {instrument}
+                  </span>
+                ))}
+              </div>
+            ) : null}
 
             {/* Genres */}
-            <div className="flex flex-wrap gap-2">
-              {musician.genres.map((genre) => (
-                <span
-                  key={genre}
-                  className="px-3 py-1 text-xs font-medium rounded-full bg-secondary text-secondary-foreground"
-                >
-                  {genre}
-                </span>
-              ))}
-            </div>
+            {musician.genres.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {musician.genres.map((genre) => (
+                  <span
+                    key={genre}
+                    className="px-3 py-1 text-xs font-medium rounded-full bg-secondary text-secondary-foreground"
+                  >
+                    {genre}
+                  </span>
+                ))}
+              </div>
+            ) : null}
 
             {/* Bio */}
-            <p className="text-sm text-muted-foreground line-clamp-3">
-              {musician.bio}
-            </p>
+            <p className="text-sm text-muted-foreground line-clamp-4">{musician.bio}</p>
 
             {/* Audio Preview */}
             {musician.audioPreviewUrl && (
@@ -171,4 +194,18 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
       </div>
     </div>
   )
+}
+
+function formatFeedTimestamp(value: string) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return "recently"
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Heart, X, MessageCircle, Share2, Music, MapPin, Play, Pause } from "lucide-react"
+import { Heart, MessageCircle, Share2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -9,16 +9,9 @@ interface MusicianCardProps {
   musician: {
     id: string
     name: string
-    age: number | null
-    location: string
-    instruments: string[]
-    genres: string[]
-    bio: string
-    imageUrl: string
-    audioPreviewUrl?: string
-    postTitle?: string
-    postCreatedAt?: string | null
-    hasBeenSeen?: boolean
+    videoTitle: string
+    videoUrl: string
+    likes: number
   }
   onLike?: () => void
   onPass?: () => void
@@ -26,7 +19,6 @@ interface MusicianCardProps {
 }
 
 export function MusicianCard({ musician, onLike, onPass, impressionPostId }: MusicianCardProps) {
-  const [isPlaying, setIsPlaying] = useState(false)
   const [liked, setLiked] = useState(false)
 
   const handleLike = () => {
@@ -39,108 +31,32 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
       className="relative h-full w-full flex items-center justify-center snap-start snap-always"
       data-feed-post-id={impressionPostId}
     >
-      {/* Card Container */}
       <div className="relative w-full max-w-md mx-auto h-[calc(100vh-8rem)] lg:h-[calc(100vh-4rem)] rounded-2xl overflow-hidden bg-card">
-        {/* Background Image */}
-        <div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{
-            backgroundImage: `url(${musician.imageUrl})`,
-          }}
-        >
-          {/* Gradient Overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent" />
-        </div>
+        <video
+          className="absolute inset-0 h-full w-full object-cover"
+          src={musician.videoUrl}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/35 to-background/10" />
 
-        {/* Content */}
         <div className="absolute inset-0 flex flex-col justify-end p-6">
-          {/* Info Section */}
-          <div className="space-y-4">
-            {(musician.postTitle || musician.postCreatedAt || musician.hasBeenSeen) && (
-              <div className="space-y-2">
-                {musician.postTitle ? (
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.24em] text-primary/90">Post</p>
-                    <h2 className="text-2xl font-semibold text-foreground">{musician.postTitle}</h2>
-                  </div>
-                ) : null}
-
-                {(musician.postCreatedAt || musician.hasBeenSeen) && (
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {musician.postCreatedAt ? <span>Shared {formatFeedTimestamp(musician.postCreatedAt)}</span> : null}
-                    {musician.hasBeenSeen ? <span>Seen before</span> : <span>New for you</span>}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Name and Age */}
-            <div className="flex items-end gap-3">
-              <h3 className="text-3xl font-bold text-foreground">{musician.name}</h3>
-              {musician.age !== null ? <span className="text-2xl text-muted-foreground">{musician.age}</span> : null}
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium text-primary/90">{musician.name}</p>
+              <h2 className="text-2xl font-semibold text-foreground">{musician.videoTitle}</h2>
             </div>
 
-            {/* Location */}
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <MapPin className="w-4 h-4" />
-              <span className="text-sm">{musician.location}</span>
+            <div className="inline-flex w-fit items-center gap-2 rounded-full bg-card/80 px-3 py-1.5 text-sm text-foreground backdrop-blur-sm">
+              <Heart className="h-4 w-4" />
+              <span>{formatLikes(musician.likes)}</span>
             </div>
-
-            {/* Instruments */}
-            {musician.instruments.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {musician.instruments.map((instrument) => (
-                  <span
-                    key={instrument}
-                    className="px-3 py-1 text-xs font-medium rounded-full bg-primary/20 text-primary"
-                  >
-                    {instrument}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            {/* Genres */}
-            {musician.genres.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {musician.genres.map((genre) => (
-                  <span
-                    key={genre}
-                    className="px-3 py-1 text-xs font-medium rounded-full bg-secondary text-secondary-foreground"
-                  >
-                    {genre}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            {/* Bio */}
-            <p className="text-sm text-muted-foreground line-clamp-4">{musician.bio}</p>
-
-            {/* Audio Preview */}
-            {musician.audioPreviewUrl && (
-              <button
-                onClick={() => setIsPlaying(!isPlaying)}
-                className="flex items-center gap-3 p-3 rounded-xl bg-secondary/80 backdrop-blur-sm hover:bg-secondary transition-colors"
-              >
-                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary">
-                  {isPlaying ? (
-                    <Pause className="w-5 h-5 text-primary-foreground" />
-                  ) : (
-                    <Play className="w-5 h-5 text-primary-foreground ml-0.5" />
-                  )}
-                </div>
-                <div className="flex-1 text-left">
-                  <p className="text-sm font-medium text-foreground">Listen to my sound</p>
-                  <p className="text-xs text-muted-foreground">Demo track - 0:30</p>
-                </div>
-                <Music className="w-5 h-5 text-muted-foreground" />
-              </button>
-            )}
           </div>
         </div>
 
-        {/* Side Actions */}
         <div className="absolute right-4 bottom-32 flex flex-col items-center gap-4">
           <button
             onClick={handleLike}
@@ -174,7 +90,6 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
         </div>
       </div>
 
-      {/* Bottom Action Buttons (Desktop) */}
       <div className="hidden lg:flex absolute bottom-8 left-1/2 -translate-x-1/2 items-center gap-6">
         <Button
           variant="outline"
@@ -196,16 +111,6 @@ export function MusicianCard({ musician, onLike, onPass, impressionPostId }: Mus
   )
 }
 
-function formatFeedTimestamp(value: string) {
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) {
-    return "recently"
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  })
+function formatLikes(likes: number) {
+  return `${likes.toLocaleString()} like${likes === 1 ? "" : "s"}`
 }

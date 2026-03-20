@@ -2,12 +2,10 @@
 -- Migration: Feed read access and swipe policies for cross-user discovery
 -- Created: 2026-03-20
 -- =============================================================================
--- The /feed experience needs to show public posts from other musicians, which
--- means authenticated users must be able to read a limited subset of cross-user
--- profile metadata for authors who already chose to publish a public post.
---
--- The same surface also needs to read and write the current viewer's own swipe
--- rows so the feed can skip posts that were already liked/passed.
+-- The /feed experience needs to show public posts from other musicians and let
+-- authenticated viewers react to them. The feed UI now only renders the post
+-- video plus the author's display name/title/likes, so the cross-user access
+-- here is intentionally limited to those exact data dependencies.
 
 ALTER TABLE public.swipes ENABLE ROW LEVEL SECURITY;
 
@@ -44,9 +42,9 @@ TO authenticated
 USING (auth.uid() = user_id);
 
 -- =============================================================================
--- Feed read policies: only expose metadata for users who already have at least
--- one public post. These policies intentionally stay read-only and narrow in
--- scope so future follower/private feed rules can build on top.
+-- Feed read policies: only expose author names for users who already have at
+-- least one public post. This keeps cross-user profile reads narrow and
+-- read-only while allowing the feed to label videos correctly.
 -- =============================================================================
 DROP POLICY IF EXISTS profiles_select_feed_public_post_authors ON public.profiles;
 CREATE POLICY profiles_select_feed_public_post_authors
@@ -62,44 +60,21 @@ USING (
     )
 );
 
-DROP POLICY IF EXISTS profile_photos_select_feed_public_post_authors ON public.profile_photos;
-CREATE POLICY profile_photos_select_feed_public_post_authors
-ON public.profile_photos
+-- =============================================================================
+-- Storage: feed viewers need read access to videos referenced by public posts so
+-- the client can create signed playback URLs for those rows.
+-- =============================================================================
+DROP POLICY IF EXISTS storage_user_posts_select_public_feed ON storage.objects;
+CREATE POLICY storage_user_posts_select_public_feed
+ON storage.objects
 FOR SELECT
 TO authenticated
 USING (
-    EXISTS (
+    bucket_id = public.user_posts_bucket()
+    AND EXISTS (
         SELECT 1
         FROM public.posts
-        WHERE posts.user_id = profile_photos.user_id
-          AND posts.visibility = 'public'
-    )
-);
-
-DROP POLICY IF EXISTS user_instruments_select_feed_public_post_authors ON public.user_instruments;
-CREATE POLICY user_instruments_select_feed_public_post_authors
-ON public.user_instruments
-FOR SELECT
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1
-        FROM public.posts
-        WHERE posts.user_id = user_instruments.user_id
-          AND posts.visibility = 'public'
-    )
-);
-
-DROP POLICY IF EXISTS user_genres_select_feed_public_post_authors ON public.user_genres;
-CREATE POLICY user_genres_select_feed_public_post_authors
-ON public.user_genres
-FOR SELECT
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1
-        FROM public.posts
-        WHERE posts.user_id = user_genres.user_id
-          AND posts.visibility = 'public'
+        WHERE posts.visibility = 'public'
+          AND posts.video_url = name
     )
 );

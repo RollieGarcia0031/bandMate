@@ -7,7 +7,12 @@ The `/feed` page shows **public posts from other users** in a simple, determinis
 - `swipes`
 - `feed_impressions`
 
-This document describes the current implementation, why it exists, and what the supporting migrations must allow.
+The current UI is intentionally minimal. Each feed card only renders:
+
+- the author's `display_name`
+- the post/video title
+- the post like count
+- the post video itself
 
 ---
 
@@ -34,13 +39,13 @@ This document describes the current implementation, why it exists, and what the 
 4. `20260320031500_feed_read_access_and_swipes.sql`
    - enables RLS on `public.swipes`
    - lets authenticated users read/write only their own swipe rows
-   - opens **read-only feed access** to the author metadata needed to render public posts:
-     - `profiles`
-     - `profile_photos`
-     - `user_instruments`
-     - `user_genres`
+   - opens read-only profile access for public-post authors so the feed can show `display_name`
+   - opens read access to Storage objects referenced by public posts so the feed can create signed video playback URLs
 
-Without this additional migration, the app could read public posts but still could not reliably render the author details for those posts because those related tables were still owner-only.
+Without this additional migration, the app could read public post rows but would still fail to either:
+
+- load the author's display name, or
+- load the actual video for many storage-backed posts
 
 ---
 
@@ -56,7 +61,15 @@ Fetch up to 100 recent rows from `posts` where:
 - `user_id != current_user_id`
 - newest posts are fetched first by `created_at DESC`
 
-This gives us the raw candidate pool. After filtering and ranking, the UI keeps the top 30 posts for display.
+The loader only selects the fields that the current card design needs:
+
+- `title`
+- `video_url`
+- `likes_count`
+- author id
+- timestamps used for ordering
+
+After filtering and ranking, the UI keeps the top 30 posts for display.
 
 ### Step 2: remove posts the user already swiped on
 
@@ -72,7 +85,7 @@ Query `feed_impressions` for the authenticated user across the same candidate po
 
 **Effect:**
 - if a post has no impression row, it is treated as **new/unseen**
-- if a post has an impression row, it is treated as **seen before**
+- if a post has an impression row, it is treated as **seen before** for ranking purposes only
 
 ### Step 4: sort remaining posts
 
@@ -87,22 +100,14 @@ That means the algorithm uses:
 - `swipes` as a **hard filter**
 - `feed_impressions` as a **soft ranking signal**
 
----
+### Step 5: resolve playable video URLs
 
-## Why this algorithm is a good starting point
+For each ranked row:
 
-This version is useful because it is:
+- if `video_url` is already a full HTTP URL, use it directly
+- otherwise treat it as a Supabase Storage path and create a signed URL from the `user-posts` bucket
 
-- easy to reason about
-- easy to debug from SQL
-- deterministic for QA
-- cheap to evolve later into a more advanced ranking model
-
-It also matches current product expectations:
-
-- swiped content should not keep resurfacing
-- previously seen but unswiped content can still come back
-- brand new content should be prioritized above already-viewed content
+This is what allows `/feed` to render the **actual uploaded video** instead of falling back to a profile image.
 
 ---
 
@@ -133,15 +138,14 @@ Both `like` and `pass` are currently terminal for feed inclusion.
 
 ## Data required to render each feed card
 
-For each surviving post, the app loads:
+For each surviving post, the app now loads only:
 
-- post fields from `posts`
-- author identity/location fields from `profiles`
-- author primary image from `profile_photos`
-- author instruments from `user_instruments`
-- author genres from `user_genres`
+- post title from `posts`
+- post like count from `posts`
+- post video from `posts.video_url`
+- author display name from `profiles`
 
-If a post does not have a thumbnail and the author does not have a profile photo, the UI falls back to a generated SVG placeholder so the card still renders cleanly.
+The feed deliberately hides descriptions and other profile metadata for now.
 
 ---
 

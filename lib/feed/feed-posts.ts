@@ -5,8 +5,8 @@ type FeedPostRow = {
   id: string
   user_id: string
   title: string | null
-  description: string | null
-  thumbnail_url: string | null
+  video_url: string
+  likes_count: number | null
   created_at: string | null
 }
 
@@ -14,9 +14,6 @@ type FeedProfileRow = {
   id: string
   username: string | null
   display_name: string | null
-  city: string | null
-  bio: string | null
-  birthday: string | null
 }
 
 type FeedSwipeRow = {
@@ -28,36 +25,13 @@ type FeedImpressionRow = {
   seen_at: string
 }
 
-type FeedPhotoRow = {
-  user_id: string
-  url: string
-  order: number
-}
-
-type FeedInstrumentJoinRow = {
-  user_id: string
-  instruments: { name: string } | { name: string }[] | null
-}
-
-type FeedGenreJoinRow = {
-  user_id: string
-  genres: { name: string } | { name: string }[] | null
-}
-
 export type FeedPostCard = {
   id: string
   authorId: string
   authorName: string
-  authorUsername: string
-  age: number | null
-  location: string
-  instruments: string[]
-  genres: string[]
-  postTitle: string
-  postBody: string
-  imageUrl: string
-  createdAt: string | null
-  hasBeenSeen: boolean
+  videoTitle: string
+  videoUrl: string
+  likes: number
 }
 
 const FEED_CANDIDATE_POOL_SIZE = 100
@@ -72,8 +46,8 @@ const MAX_FEED_POSTS = 30
  * 3. unseen posts rank ahead of previously impressed posts
  * 4. newer posts rank first inside each bucket
  *
- * This keeps the implementation easy to reason about while still making both
- * `swipes` and `feed_impressions` affect what shows up in `/feed`.
+ * The card UI is intentionally minimal for now, so the loader only returns the
+ * author display name plus post video/title/likes that `/feed` actually shows.
  */
 export async function loadFeedPosts() {
   const supabase = createSupabaseBrowserClient()
@@ -92,7 +66,7 @@ export async function loadFeedPosts() {
 
   const { data: postRows, error: postsError } = await supabase
     .from("posts")
-    .select("id, user_id, title, description, thumbnail_url, created_at")
+    .select("id, user_id, title, video_url, likes_count, created_at")
     .eq("visibility", "public")
     .neq("user_id", user.id)
     .order("created_at", { ascending: false })
@@ -115,16 +89,10 @@ export async function loadFeedPosts() {
     { data: swipeRows, error: swipesError },
     { data: impressionRows, error: impressionsError },
     { data: profileRows, error: profilesError },
-    { data: photoRows, error: photosError },
-    { data: instrumentRows, error: instrumentsError },
-    { data: genreRows, error: genresError },
   ] = await Promise.all([
     supabase.from("swipes").select("post_id").eq("user_id", user.id).in("post_id", postIds),
     supabase.from("feed_impressions").select("post_id, seen_at").eq("user_id", user.id).in("post_id", postIds),
-    supabase.from("profiles").select("id, username, display_name, city, bio, birthday").in("id", authorIds),
-    supabase.from("profile_photos").select("user_id, url, order").in("user_id", authorIds).order("order", { ascending: true }),
-    supabase.from("user_instruments").select("user_id, instruments(name)").in("user_id", authorIds),
-    supabase.from("user_genres").select("user_id, genres(name)").in("user_id", authorIds),
+    supabase.from("profiles").select("id, username, display_name").in("id", authorIds),
   ])
 
   if (swipesError) {
@@ -139,18 +107,6 @@ export async function loadFeedPosts() {
     throw profilesError
   }
 
-  if (photosError) {
-    throw photosError
-  }
-
-  if (instrumentsError) {
-    throw instrumentsError
-  }
-
-  if (genresError) {
-    throw genresError
-  }
-
   const swipedPostIds = new Set((swipeRows as FeedSwipeRow[] | null)?.map((row) => row.post_id) ?? [])
   const impressionLookup = new Map(
     ((impressionRows as FeedImpressionRow[] | null) ?? []).map((row) => [row.post_id, row.seen_at])
@@ -158,47 +114,26 @@ export async function loadFeedPosts() {
   const profileLookup = new Map(
     ((profileRows as FeedProfileRow[] | null) ?? []).map((profile) => [profile.id, profile])
   )
-  const photoLookup = new Map<string, string>()
 
-  for (const row of (photoRows as FeedPhotoRow[] | null) ?? []) {
-    if (!photoLookup.has(row.user_id)) {
-      photoLookup.set(row.user_id, resolveProfilePhotoUrl(row.url))
-    }
-  }
-
-  const instrumentsByUser = buildJoinedNameLookup(
-    (instrumentRows as FeedInstrumentJoinRow[] | null) ?? [],
-    "instruments"
-  )
-  const genresByUser = buildJoinedNameLookup(
-    (genreRows as FeedGenreJoinRow[] | null) ?? [],
-    "genres"
-  )
-
-  return posts
+  const rankedPosts = posts
     .filter((post) => !swipedPostIds.has(post.id))
     .sort((left, right) => compareFeedPosts(left, right, impressionLookup))
     .slice(0, MAX_FEED_POSTS)
-    .map((post) => {
+
+  return Promise.all(
+    rankedPosts.map(async (post) => {
       const author = profileLookup.get(post.user_id)
-      const imageUrl = post.thumbnail_url?.trim() || photoLookup.get(post.user_id) || createFeedPlaceholder(author?.display_name)
 
       return {
         id: post.id,
         authorId: post.user_id,
         authorName: author?.display_name?.trim() || author?.username?.trim() || "BandMate member",
-        authorUsername: author?.username?.trim() || "",
-        age: calculateAge(author?.birthday ?? null),
-        location: author?.city?.trim() || "Location not added yet",
-        instruments: instrumentsByUser.get(post.user_id) ?? [],
-        genres: genresByUser.get(post.user_id) ?? [],
-        postTitle: post.title?.trim() || "Untitled post",
-        postBody: post.description?.trim() || author?.bio?.trim() || "This musician has not added details for this post yet.",
-        imageUrl,
-        createdAt: post.created_at,
-        hasBeenSeen: impressionLookup.has(post.id),
+        videoTitle: post.title?.trim() || "Untitled post",
+        videoUrl: await resolvePostVideoUrl(post.video_url),
+        likes: post.likes_count ?? 0,
       }
     })
+  )
 }
 
 function compareFeedPosts(
@@ -225,89 +160,24 @@ function getTimestamp(value: string | null) {
   return Number.isNaN(timestamp) ? 0 : timestamp
 }
 
-function buildJoinedNameLookup<Row extends { user_id: string }>(
-  rows: Row[],
-  relationKey: keyof Row
-) {
-  const lookup = new Map<string, string[]>()
-
-  for (const row of rows) {
-    const names = normalizeJoinedNames(row[relationKey])
-
-    if (!names.length) {
-      continue
-    }
-
-    lookup.set(row.user_id, [...(lookup.get(row.user_id) ?? []), ...names])
+/**
+ * Feed cards should play the post video itself rather than showing profile art.
+ * Newer rows store a storage path, while older rows may already contain a full
+ * URL, so the resolver supports both formats.
+ */
+async function resolvePostVideoUrl(videoReference: string) {
+  if (/^https?:\/\//i.test(videoReference)) {
+    return videoReference
   }
 
-  return lookup
-}
+  const supabase = createSupabaseBrowserClient()
+  const { data, error } = await supabase.storage
+    .from(supabase_config.storageBuckets.userPosts)
+    .createSignedUrl(videoReference, 60 * 60)
 
-function normalizeJoinedNames(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => normalizeJoinedNames(entry))
+  if (error) {
+    throw error
   }
 
-  if (value && typeof value === "object" && "name" in value && typeof value.name === "string") {
-    return [value.name]
-  }
-
-  return []
-}
-
-function resolveProfilePhotoUrl(photoUrl: string) {
-  if (/^https?:\/\//i.test(photoUrl)) {
-    return photoUrl
-  }
-
-  return createSupabaseBrowserClient()
-    .storage
-    .from(supabase_config.storageBuckets.profilePhotos)
-    .getPublicUrl(photoUrl).data.publicUrl
-}
-
-function calculateAge(birthday: string | null) {
-  if (!birthday) {
-    return null
-  }
-
-  const birthDate = new Date(birthday)
-
-  if (Number.isNaN(birthDate.getTime())) {
-    return null
-  }
-
-  const today = new Date()
-  let age = today.getUTCFullYear() - birthDate.getUTCFullYear()
-  const monthDelta = today.getUTCMonth() - birthDate.getUTCMonth()
-
-  if (monthDelta < 0 || (monthDelta === 0 && today.getUTCDate() < birthDate.getUTCDate())) {
-    age -= 1
-  }
-
-  return age >= 0 ? age : null
-}
-
-function createFeedPlaceholder(displayName: string | null | undefined) {
-  const safeName = (displayName?.trim() || "BandMate member").slice(0, 40)
-  const initials = safeName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("") || "BM"
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1600"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#171717"/><stop offset="100%" stop-color="#4f46e5"/></linearGradient></defs><rect width="1200" height="1600" fill="url(#g)"/><text x="50%" y="45%" fill="#fafafa" font-family="Arial, sans-serif" font-size="220" text-anchor="middle">${initials}</text><text x="50%" y="58%" fill="#e5e7eb" font-family="Arial, sans-serif" font-size="56" text-anchor="middle">${escapeXml(safeName)}</text></svg>`
-
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
-}
-
-function escapeXml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;")
+  return data.signedUrl
 }

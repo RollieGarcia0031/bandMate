@@ -143,15 +143,9 @@ export default function FeedPage() {
           musician={{
             id: post.authorId,
             name: post.authorName,
-            age: post.age,
-            location: post.location,
-            instruments: post.instruments,
-            genres: post.genres,
-            bio: post.postBody,
-            imageUrl: post.imageUrl,
-            postTitle: post.postTitle,
-            postCreatedAt: post.createdAt,
-            hasBeenSeen: post.hasBeenSeen,
+            videoTitle: post.videoTitle,
+            videoUrl: post.videoUrl,
+            likes: post.likes,
           }}
           onLike={() => void handleSwipe(post.id, "like")}
           onPass={() => void handleSwipe(post.id, "pass")}

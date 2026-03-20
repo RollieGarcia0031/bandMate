@@ -1,7 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertCircle, CalendarDays, Heart, Info, Loader2, Play, UserRound } from "lucide-react"
+import { AlertCircle, CalendarDays, ChevronDown, ChevronUp, Heart, Info, Loader2, Play, UserRound } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -101,21 +102,24 @@ function formatPostDate(createdAt: string | null) {
 
 type FeedPostCardProps = {
   post: FeedPost
+  registerPost: (postId: string, element: HTMLElement | null) => void
   registerVideo: (postId: string, element: HTMLVideoElement | null) => void
   onVideoPlay: (postId: string) => void
   onVideoPause: (postId: string) => void
 }
 
-function FeedPostCard({ post, registerVideo, onVideoPlay, onVideoPause }: FeedPostCardProps) {
+function FeedPostCard({ post, registerPost, registerVideo, onVideoPlay, onVideoPause }: FeedPostCardProps) {
   const [playbackError, setPlaybackError] = useState<string | null>(null)
   const videoError = playbackError ?? post.videoError
   const postedOnLabel = formatPostDate(post.createdAt)
-  const hasLongDescription = post.description.length > 140
   const descriptionText = post.description || "No description provided."
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div className="relative flex h-[min(78svh,42rem)] min-h-[24rem] items-center justify-center bg-black">
+    <article
+      ref={(element) => registerPost(post.id, element)}
+      className="relative h-[calc(100svh-10rem)] min-h-[32rem] snap-start overflow-hidden rounded-3xl border border-border bg-card shadow-sm"
+    >
+      <div className="relative flex h-full items-center justify-center bg-black">
         {post.videoUrl ? (
           <>
             <video
@@ -163,46 +167,27 @@ function FeedPostCard({ post, registerVideo, onVideoPlay, onVideoPause }: FeedPo
             </div>
           </div>
         )}
-      </div>
 
-      <div className="space-y-4 p-4 lg:p-5">
-        {videoError && (
-          <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black via-black/65 to-transparent" />
+
+        {videoError ? (
+          <div className="absolute left-4 right-4 top-16 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive backdrop-blur-sm">
             <div className="mb-2 flex items-center gap-2 font-medium">
               <AlertCircle className="h-4 w-4" />
               Video failed to load
             </div>
             <p className="break-words font-mono text-xs leading-5">{videoError}</p>
           </div>
-        )}
+        ) : null}
 
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-foreground">{post.displayName}</p>
-          {post.username ? <p className="text-sm text-muted-foreground">@{post.username}</p> : null}
-        </div>
-
-        <div className="space-y-2">
-          <h2 className="text-lg font-semibold text-foreground">{post.title}</h2>
+        <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-4 sm:p-5">
+          <h2 className="max-w-2xl text-xl font-semibold text-white drop-shadow-sm sm:text-2xl">{post.title}</h2>
 
           <Dialog>
             <DialogTrigger asChild>
-              <button
-                type="button"
-                className="w-full rounded-lg text-left outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <p
-                  className={cn(
-                    "text-sm leading-6 text-muted-foreground",
-                    !post.description && "italic",
-                    hasLongDescription && "line-clamp-2",
-                  )}
-                >
-                  {descriptionText}
-                </p>
-                <span className="mt-1 inline-flex text-xs font-medium text-primary">
-                  {hasLongDescription ? "Tap to read more" : "Tap for post details"}
-                </span>
-              </button>
+              <Button type="button" className="shrink-0 rounded-full bg-white text-black hover:bg-white/90">
+                View full details
+              </Button>
             </DialogTrigger>
             <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-2xl">
               <DialogHeader>
@@ -267,6 +252,7 @@ export default function FeedPage() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null)
   const videoElementsRef = useRef<Record<string, HTMLVideoElement | null>>({})
+  const postElementsRef = useRef<Record<string, HTMLElement | null>>({})
 
   const registerVideo = useCallback((postId: string, element: HTMLVideoElement | null) => {
     if (element) {
@@ -275,6 +261,15 @@ export default function FeedPage() {
     }
 
     delete videoElementsRef.current[postId]
+  }, [])
+
+  const registerPost = useCallback((postId: string, element: HTMLElement | null) => {
+    if (element) {
+      postElementsRef.current[postId] = element
+      return
+    }
+
+    delete postElementsRef.current[postId]
   }, [])
 
   const handleVideoPlay = useCallback((postId: string) => {
@@ -291,9 +286,116 @@ export default function FeedPage() {
     setActiveVideoId((currentVideoId) => (currentVideoId === postId ? null : currentVideoId))
   }, [])
 
+  const playVideoById = useCallback(
+    async (postId: string) => {
+      const videoElement = videoElementsRef.current[postId]
+
+      if (!videoElement) {
+        setActiveVideoId(postId)
+        return
+      }
+
+      Object.entries(videoElementsRef.current).forEach(([otherPostId, element]) => {
+        if (otherPostId !== postId && element && !element.paused) {
+          element.pause()
+        }
+      })
+
+      try {
+        await videoElement.play()
+      } catch {
+        setActiveVideoId(postId)
+      }
+    },
+    [],
+  )
+
+  const getCurrentPostIndex = useCallback(() => {
+    if (typeof window === "undefined") {
+      return 0
+    }
+
+    if (activeVideoId) {
+      const activeIndex = posts.findIndex((post) => post.id === activeVideoId)
+
+      if (activeIndex >= 0) {
+        return activeIndex
+      }
+    }
+
+    let closestIndex = 0
+    let closestDistance = Number.POSITIVE_INFINITY
+    const viewportCenter = window.innerHeight / 2
+
+    posts.forEach((post, index) => {
+      const element = postElementsRef.current[post.id]
+
+      if (!element) {
+        return
+      }
+
+      const rect = element.getBoundingClientRect()
+      const elementCenter = rect.top + rect.height / 2
+      const distanceToCenter = Math.abs(elementCenter - viewportCenter)
+
+      if (distanceToCenter < closestDistance) {
+        closestDistance = distanceToCenter
+        closestIndex = index
+      }
+    })
+
+    return closestIndex
+  }, [activeVideoId, posts])
+
+  const scrollToPostAtIndex = useCallback(
+    (targetIndex: number) => {
+      const targetPost = posts[targetIndex]
+
+      if (!targetPost) {
+        return
+      }
+
+      postElementsRef.current[targetPost.id]?.scrollIntoView({ behavior: "smooth", block: "start" })
+      window.setTimeout(() => {
+        void playVideoById(targetPost.id)
+      }, 350)
+    },
+    [playVideoById, posts],
+  )
+
+  const scrollToPreviousPost = useCallback(() => {
+    const currentIndex = getCurrentPostIndex()
+    scrollToPostAtIndex(Math.max(currentIndex - 1, 0))
+  }, [getCurrentPostIndex, scrollToPostAtIndex])
+
+  const scrollToNextPost = useCallback(() => {
+    const currentIndex = getCurrentPostIndex()
+    scrollToPostAtIndex(Math.min(currentIndex + 1, posts.length - 1))
+  }, [getCurrentPostIndex, posts.length, scrollToPostAtIndex])
+
   useEffect(() => {
     void loadFeedPosts()
   }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowUp") {
+        event.preventDefault()
+        scrollToPreviousPost()
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault()
+        scrollToNextPost()
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [scrollToNextPost, scrollToPreviousPost])
 
   useEffect(() => {
     if (!activeVideoId) {
@@ -373,23 +475,53 @@ export default function FeedPage() {
     )
   }
 
+  const currentIndex = getCurrentPostIndex()
+
   return (
     <div className="min-h-screen bg-background pb-24">
-      <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 lg:px-6">
+      <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-4 lg:px-6">
         <header className="space-y-1">
           <h1 className="text-2xl font-bold text-foreground">Feed</h1>
           <p className="text-sm text-muted-foreground">Showing every public video while the recommendation algorithm is still being built.</p>
         </header>
 
-        {posts.map((post) => (
-          <FeedPostCard
-            key={post.id}
-            post={post}
-            registerVideo={registerVideo}
-            onVideoPlay={handleVideoPlay}
-            onVideoPause={handleVideoPause}
-          />
-        ))}
+        <div className="space-y-4 snap-y snap-mandatory">
+          {posts.map((post) => (
+            <FeedPostCard
+              key={post.id}
+              post={post}
+              registerPost={registerPost}
+              registerVideo={registerVideo}
+              onVideoPlay={handleVideoPlay}
+              onVideoPause={handleVideoPause}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="fixed bottom-24 right-4 z-40 flex flex-col gap-2 sm:right-6">
+        <Button
+          type="button"
+          size="icon"
+          variant="secondary"
+          className="h-12 w-12 rounded-full shadow-lg"
+          onClick={scrollToPreviousPost}
+          disabled={currentIndex <= 0}
+          aria-label="Go to previous video"
+        >
+          <ChevronUp className="h-5 w-5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="secondary"
+          className="h-12 w-12 rounded-full shadow-lg"
+          onClick={scrollToNextPost}
+          disabled={currentIndex >= posts.length - 1}
+          aria-label="Go to next video"
+        >
+          <ChevronDown className="h-5 w-5" />
+        </Button>
       </div>
     </div>
   )

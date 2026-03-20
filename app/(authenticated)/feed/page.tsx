@@ -14,13 +14,13 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { getPostVideoReferenceDebugInfo, type PostRow, resolvePostVideoUrl } from "@/lib/posts"
 import { cn } from "@/lib/utils"
 
+type FeedPostProfile = {
+  display_name: string | null
+  username: string | null
+}
+
 type FeedPostRow = PostRow & {
-  profiles:
-    | {
-        display_name: string | null
-        username: string | null
-      }[]
-    | null
+  profiles: FeedPostProfile | FeedPostProfile[] | null
 }
 
 type FeedPost = {
@@ -46,7 +46,7 @@ type FeedPost = {
  */
 async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
   const videoDebugInfo = getPostVideoReferenceDebugInfo(row.video_url)
-  const profile = row.profiles?.[0]
+  const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles
   const fallbackUsername = profile?.username?.trim() || null
 
   const basePost = {

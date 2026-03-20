@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Loader2, Play } from "lucide-react"
+import { AlertCircle, Loader2, Play } from "lucide-react"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
-import { type PostRow, resolvePostVideoUrl } from "@/lib/posts"
+import { getPostVideoReferenceDebugInfo, type PostRow, resolvePostVideoUrl } from "@/lib/posts"
 import { cn } from "@/lib/utils"
 
 type FeedPostRow = PostRow & {
@@ -20,6 +20,9 @@ type FeedPost = {
   title: string
   description: string
   videoUrl: string
+  videoReference: string
+  normalizedVideoPath: string | null
+  videoReferenceKind: string
 }
 
 /**
@@ -28,13 +31,79 @@ type FeedPost = {
  * and a playable video URL while the ranking algorithm is still being defined.
  */
 async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
-  return {
-    id: row.id,
-    displayName: row.profiles?.[0]?.display_name?.trim() || "BandMate user",
-    title: row.title?.trim() || "Untitled post",
-    description: row.description?.trim() || "",
-    videoUrl: await resolvePostVideoUrl(row.video_url),
+  const videoDebugInfo = getPostVideoReferenceDebugInfo(row.video_url)
+
+  try {
+    return {
+      id: row.id,
+      displayName: row.profiles?.[0]?.display_name?.trim() || "BandMate user",
+      title: row.title?.trim() || "Untitled post",
+      description: row.description?.trim() || "",
+      videoUrl: await resolvePostVideoUrl(row.video_url),
+      videoReference: row.video_url,
+      normalizedVideoPath: videoDebugInfo.normalizedStoragePath,
+      videoReferenceKind: videoDebugInfo.referenceKind,
+    }
+  } catch (error) {
+    throw new Error(
+      [
+        `Feed video failed to resolve for post ${row.id}.`,
+        error instanceof Error ? error.message : "Unknown video resolution error.",
+      ].join(" "),
+    )
   }
+}
+
+function FeedPostCard({ post }: { post: FeedPost }) {
+  const [videoError, setVideoError] = useState<string | null>(null)
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="relative bg-secondary">
+        <video
+          src={post.videoUrl}
+          className="aspect-[9/16] w-full bg-black object-contain"
+          controls
+          playsInline
+          preload="metadata"
+          onError={() => {
+            setVideoError(
+              [
+                `Video playback failed for post ${post.id}.`,
+                `referenceKind=${post.videoReferenceKind}`,
+                `storedVideoUrl=${JSON.stringify(post.videoReference)}`,
+                `normalizedStoragePath=${JSON.stringify(post.normalizedVideoPath)}`,
+                `resolvedVideoUrl=${JSON.stringify(post.videoUrl)}`,
+                `Check that this object exists in the configured Supabase bucket and that the signed URL matches the stored path.`,
+              ].join(" "),
+            )
+          }}
+        />
+        <div className="pointer-events-none absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
+          <Play className="h-3.5 w-3.5 fill-white" />
+          Video
+        </div>
+      </div>
+
+      <div className="space-y-3 p-4 lg:p-5">
+        {videoError && (
+          <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="mb-2 flex items-center gap-2 font-medium">
+              <AlertCircle className="h-4 w-4" />
+              Video failed to load
+            </div>
+            <p className="break-words font-mono text-xs leading-5">{videoError}</p>
+          </div>
+        )}
+
+        <p className="text-sm font-medium text-primary">{post.displayName}</p>
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold text-foreground">{post.title}</h2>
+          <p className={cn("text-sm leading-6 text-muted-foreground", !post.description && "italic")}>{post.description || "No description provided."}</p>
+        </div>
+      </div>
+    </article>
+  )
 }
 
 export default function FeedPage() {
@@ -90,8 +159,12 @@ export default function FeedPage() {
   if (pageError) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
-        <div className="w-full max-w-lg rounded-xl border border-destructive/40 bg-destructive/10 px-5 py-4 text-sm text-destructive">
-          {pageError}
+        <div className="w-full max-w-2xl rounded-xl border border-destructive/40 bg-destructive/10 px-5 py-4 text-sm text-destructive">
+          <div className="mb-2 flex items-center gap-2 font-medium">
+            <AlertCircle className="h-4 w-4" />
+            Feed failed to load
+          </div>
+          <p className="break-words font-mono text-xs leading-5">{pageError}</p>
         </div>
       </div>
     )
@@ -117,29 +190,7 @@ export default function FeedPage() {
         </header>
 
         {posts.map((post) => (
-          <article key={post.id} className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-            <div className="relative bg-secondary">
-              <video
-                src={post.videoUrl}
-                className="aspect-[9/16] w-full bg-black object-contain"
-                controls
-                playsInline
-                preload="metadata"
-              />
-              <div className="pointer-events-none absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
-                <Play className="h-3.5 w-3.5 fill-white" />
-                Video
-              </div>
-            </div>
-
-            <div className="space-y-3 p-4 lg:p-5">
-              <p className="text-sm font-medium text-primary">{post.displayName}</p>
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-foreground">{post.title}</h2>
-                <p className={cn("text-sm leading-6 text-muted-foreground", !post.description && "italic")}>{post.description || "No description provided."}</p>
-              </div>
-            </div>
-          </article>
+          <FeedPostCard key={post.id} post={post} />
         ))}
       </div>
     </div>

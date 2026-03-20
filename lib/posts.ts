@@ -14,28 +14,47 @@ export type PostRow = {
   created_at: string | null
 }
 
+export type PostVideoReferenceDebugInfo = {
+  bucketName: string
+  normalizedStoragePath: string | null
+  originalReference: string
+  referenceKind:
+    | "empty"
+    | "storage-path"
+    | "bucket-prefixed-path"
+    | "supabase-storage-url"
+    | "external-url"
+    | "invalid-url"
+}
+
 const USER_POSTS_BUCKET = supabase_config.storageBuckets.userPosts
 
 /**
- * Normalize a persisted post video reference into the storage object path used
- * by Supabase Storage APIs.
- *
- * Historical rows may contain a plain storage path, a bucket-prefixed path, or
- * even an older signed/public Supabase Storage URL. Returning `null` signals
- * that the reference should be used as-is because it points to an external URL.
+ * Inspect a persisted post video reference and describe how the app will treat
+ * it before requesting a signed playback URL.
  */
-function normalizeUserPostStoragePath(videoReference: string) {
+export function getPostVideoReferenceDebugInfo(videoReference: string): PostVideoReferenceDebugInfo {
   const trimmedReference = videoReference.trim()
   const bucketPrefix = `${USER_POSTS_BUCKET}/`
 
   if (!trimmedReference) {
-    return ""
+    return {
+      bucketName: USER_POSTS_BUCKET,
+      normalizedStoragePath: "",
+      originalReference: videoReference,
+      referenceKind: "empty",
+    }
   }
 
   if (!/^https?:\/\//i.test(trimmedReference)) {
-    return trimmedReference.startsWith(bucketPrefix)
-      ? trimmedReference.slice(bucketPrefix.length)
-      : trimmedReference
+    return {
+      bucketName: USER_POSTS_BUCKET,
+      normalizedStoragePath: trimmedReference.startsWith(bucketPrefix)
+        ? trimmedReference.slice(bucketPrefix.length)
+        : trimmedReference,
+      originalReference: videoReference,
+      referenceKind: trimmedReference.startsWith(bucketPrefix) ? "bucket-prefixed-path" : "storage-path",
+    }
   }
 
   try {
@@ -44,19 +63,39 @@ function normalizeUserPostStoragePath(videoReference: string) {
     const storageMarkerIndex = pathSegments.indexOf("object")
 
     if (storageMarkerIndex === -1) {
-      return null
+      return {
+        bucketName: USER_POSTS_BUCKET,
+        normalizedStoragePath: null,
+        originalReference: videoReference,
+        referenceKind: "external-url",
+      }
     }
 
     const bucketName = pathSegments[storageMarkerIndex + 2]
     const objectPath = pathSegments.slice(storageMarkerIndex + 3).join("/")
 
     if (bucketName !== USER_POSTS_BUCKET || !objectPath) {
-      return null
+      return {
+        bucketName: USER_POSTS_BUCKET,
+        normalizedStoragePath: null,
+        originalReference: videoReference,
+        referenceKind: "external-url",
+      }
     }
 
-    return decodeURIComponent(objectPath)
+    return {
+      bucketName: USER_POSTS_BUCKET,
+      normalizedStoragePath: decodeURIComponent(objectPath),
+      originalReference: videoReference,
+      referenceKind: "supabase-storage-url",
+    }
   } catch {
-    return trimmedReference
+    return {
+      bucketName: USER_POSTS_BUCKET,
+      normalizedStoragePath: trimmedReference,
+      originalReference: videoReference,
+      referenceKind: "invalid-url",
+    }
   }
 }
 
@@ -69,19 +108,28 @@ function normalizeUserPostStoragePath(videoReference: string) {
  * and library pages can play both new and old videos reliably.
  */
 export async function resolvePostVideoUrl(videoReference: string) {
-  const normalizedStoragePath = normalizeUserPostStoragePath(videoReference)
+  const debugInfo = getPostVideoReferenceDebugInfo(videoReference)
 
-  if (normalizedStoragePath === null) {
+  if (debugInfo.normalizedStoragePath === null) {
     return videoReference
   }
 
   const supabase = createSupabaseBrowserClient()
   const { data, error } = await supabase.storage
     .from(USER_POSTS_BUCKET)
-    .createSignedUrl(normalizedStoragePath, 60 * 60)
+    .createSignedUrl(debugInfo.normalizedStoragePath, 60 * 60)
 
   if (error) {
-    throw error
+    throw new Error(
+      [
+        `Failed to resolve post video from Supabase Storage.`,
+        `bucket=${debugInfo.bucketName}`,
+        `referenceKind=${debugInfo.referenceKind}`,
+        `originalReference=${JSON.stringify(debugInfo.originalReference)}`,
+        `normalizedStoragePath=${JSON.stringify(debugInfo.normalizedStoragePath)}`,
+        `supabaseError=${error.message}`,
+      ].join(" "),
+    )
   }
 
   return data.signedUrl

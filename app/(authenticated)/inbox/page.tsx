@@ -1,9 +1,19 @@
 "use client"
 
-import { useState } from "react"
-import { MessageCircle, Music2, Heart } from "lucide-react"
+import { useEffect, useState } from "react"
+import { MessageCircle, Music2, Heart, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import { supabase_config } from "@/lib/supabase/config"
+import { getTheyLikedYouCounts } from "./actions"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 // Mock conversations - will be replaced with Supabase data
 const mockConversations = [
@@ -45,53 +55,155 @@ const mockConversations = [
   },
 ]
 
-const mockMatches = [
-  {
-    id: "5",
-    name: "Riley Johnson",
-    avatar: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop",
-    theyLikedYou: 3,
-    youLikedThem: 2,
-    isNew: true,
-  },
-  {
-    id: "6",
-    name: "Casey Morgan",
-    avatar: "https://images.unsplash.com/photo-1463453091185-61582044d556?w=100&h=100&fit=crop",
-    theyLikedYou: 5,
-    youLikedThem: 4,
-    isNew: true,
-  },
-  {
-    id: "7",
-    name: "Morgan Lee",
-    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop",
-    theyLikedYou: 2,
-    youLikedThem: 3,
-    isNew: false,
-  },
-  {
-    id: "8",
-    name: "Alex Chen",
-    avatar: "https://images.unsplash.com/photo-1519395744202-2e75f134e9b9?w=100&h=100&fit=crop",
-    theyLikedYou: 7,
-    youLikedThem: 6,
-    isNew: false,
-  },
-  {
-    id: "9",
-    name: "Jordan Davis",
-    avatar: "https://images.unsplash.com/photo-1516640763385-55eaf60ef3f9?w=100&h=100&fit=crop",
-    theyLikedYou: 1,
-    youLikedThem: 2,
-    isNew: false,
-  },
-]
+// Matches will be fetched from Supabase
+type MatchItem = {
+  id: string
+  name: string
+  avatar: string
+  theyLikedYou: number
+  youLikedThem: number
+  isNew: boolean
+}
 
 type TabType = "messages" | "matches"
 
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<TabType>("messages")
+  const [matches, setMatches] = useState<MatchItem[]>([])
+  const [isLoadingMatches, setIsLoadingMatches] = useState(true)
+  const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
+
+  const sortedMatches = [...matches].sort((a, b) => {
+    if (matchSortBy === "theyLikedYou") {
+      if (b.theyLikedYou !== a.theyLikedYou) return b.theyLikedYou - a.theyLikedYou
+      return b.youLikedThem - a.youLikedThem
+    } else {
+      if (b.youLikedThem !== a.youLikedThem) return b.youLikedThem - a.youLikedThem
+      return b.theyLikedYou - a.theyLikedYou
+    }
+  })
+
+  useEffect(() => {
+    void loadMatches()
+  }, [])
+
+  /**
+   * Loads the user's matches from the database, fetches the profile details,
+   * and dynamically calculates bidirectional video like statistics.
+   */
+  async function loadMatches() {
+    setIsLoadingMatches(true)
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // 1. Fetch matches where the current user is either user1 or user2
+      const { data: userMatches, error: matchesError } = await supabase
+        .from("matches")
+        .select("*")
+        .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
+        .order("created_at", { ascending: false })
+
+      if (matchesError) throw matchesError
+
+      if (!userMatches || userMatches.length === 0) {
+        setMatches([])
+        return
+      }
+
+      // 2. Identify the "other" user IDs and map them to the match ID
+      const matchedUserIds = userMatches.map(m => m.user1_id === user.id ? m.user2_id : m.user1_id)
+      const matchMap = new Map()
+      userMatches.forEach(m => {
+        const otherId = m.user1_id === user.id ? m.user2_id : m.user1_id
+        // In a full app, we might check a last_viewed timestamp to set isNew
+        matchMap.set(otherId, { matchId: m.id, isNew: false })
+      })
+
+      // 3. Fetch the profiles and their primary photos for these matched users
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select(`
+          id, 
+          display_name,
+          profile_photos(url, order)
+        `)
+        .in("id", matchedUserIds)
+
+      if (profilesError) {
+        console.error("Profiles fetch error:", profilesError)
+      }
+
+      // 5. Calculate "theyLikedYou"
+      // They (matched users) are the swipers, you (logged-in user) are the post owner
+      // We use a Server Action to fetch this because the row level security
+      // restricts queries on `swipes` to the swiper. The admin service
+      // bypasses this so we can see who correctly liked the current user's posts.
+      const theyLikedYouData = await getTheyLikedYouCounts(matchedUserIds, user.id)
+
+      const theyLikedYouCounts = new Map<string, number>()
+      theyLikedYouData?.forEach((row: any) => {
+        theyLikedYouCounts.set(row.user_id, (theyLikedYouCounts.get(row.user_id) || 0) + 1)
+      })
+
+      // 6. Calculate "youLikedThem"
+      // You (logged-in user) are the swiper, they (matched users) are the post owners
+      const { data: youLikedThemData } = await supabase
+        .from("swipes")
+        .select(`
+          posts!inner ( user_id )
+        `)
+        .eq("user_id", user.id)
+        .eq("direction", "like")
+        .in("posts.user_id", matchedUserIds)
+
+      const youLikedThemCounts = new Map<string, number>()
+      youLikedThemData?.forEach((row: any) => {
+        const postOwnerId = row.posts.user_id
+        youLikedThemCounts.set(postOwnerId, (youLikedThemCounts.get(postOwnerId) || 0) + 1)
+      })
+
+      // 7. Assemble the final MatchItem array for the UI
+      const assembledMatches: MatchItem[] = (profilesData || []).map(profile => {
+        // Evaluate the embedded related profile_photos array
+        const userPhotos = profile.profile_photos || []
+        // Sort safely accounting for any potential type mismatches
+        userPhotos.sort((a: any, b: any) => (a.order || 0) - (b.order || 0))
+        const pPhoto = userPhotos[0]
+
+        const matchInfo = matchMap.get(profile.id)
+
+        let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
+        if (pPhoto?.url) {
+          if (pPhoto.url.startsWith("http")) {
+            avatarUrl = pPhoto.url
+          } else {
+            avatarUrl = supabase.storage
+              .from(supabase_config.storageBuckets.profilePhotos)
+              .getPublicUrl(pPhoto.url).data.publicUrl
+          }
+        }
+
+        return {
+          id: matchInfo.matchId,
+          name: profile.display_name,
+          avatar: avatarUrl,
+          theyLikedYou: theyLikedYouCounts.get(profile.id) || 0,
+          youLikedThem: youLikedThemCounts.get(profile.id) || 0,
+          isNew: matchInfo.isNew
+        }
+      })
+
+      setMatches(assembledMatches)
+
+    } catch (error) {
+      console.error("Error loading matches:", error)
+    } finally {
+      setIsLoadingMatches(false)
+    }
+  }
 
   return (
     <div className="min-h-screen">
@@ -123,7 +235,7 @@ export default function InboxPage() {
             )}
           >
             <Heart className="w-4 h-4" />
-            Matches ({mockMatches.length})
+            Matches ({matches.length})
           </button>
         </div>
       </div>
@@ -132,11 +244,11 @@ export default function InboxPage() {
       {activeTab === "messages" && (
         <>
           {/* New Matches Preview */}
-          {mockMatches.filter((m) => m.isNew).length > 0 && (
+          {matches.filter((m) => m.isNew).length > 0 && (
             <div className="p-4 lg:p-6 border-b border-border">
               <h2 className="text-sm font-semibold text-muted-foreground mb-4">NEW MATCHES</h2>
               <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
-                {mockMatches
+                {matches
                   .filter((m) => m.isNew)
                   .map((match) => (
                     <Link
@@ -226,9 +338,28 @@ export default function InboxPage() {
 
       {/* Matches Tab */}
       {activeTab === "matches" && (
-        <div className="divide-y divide-border">
-          {mockMatches.length > 0 ? (
-            mockMatches.map((match) => (
+        <div className="flex flex-col">
+          {matches.length > 0 && !isLoadingMatches && (
+            <div className="flex justify-end p-4 border-b border-border">
+              <Select value={matchSortBy} onValueChange={(val: "theyLikedYou" | "youLikedThem") => setMatchSortBy(val)}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="theyLikedYou">Sort by: Liked you</SelectItem>
+                  <SelectItem value="youLikedThem">Sort by: You liked</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="divide-y divide-border">
+            {isLoadingMatches ? (
+              <div className="flex justify-center items-center py-20 px-4">
+                <Loader2 className="w-10 h-10 text-muted-foreground animate-spin" />
+              </div>
+            ) : sortedMatches.length > 0 ? (
+              sortedMatches.map((match) => (
               <Link
                 key={match.id}
                 href={`/inbox/${match.id}`}
@@ -306,6 +437,7 @@ export default function InboxPage() {
               </p>
             </div>
           )}
+        </div>
         </div>
       )}
     </div>

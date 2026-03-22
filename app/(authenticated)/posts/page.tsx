@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Globe, Loader2, Lock, MessageCircle, Play, Upload, Users, X } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { type PostRow, resolvePostVideoUrl, type Visibility } from "@/lib/posts"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
@@ -52,8 +53,15 @@ async function mapPostRowToPost(row: PostRow): Promise<Post> {
 }
 
 export default function PostsPage() {
+  // State for user's own posts
   const [posts, setPosts] = useState<Post[]>([])
   const [isLoadingPosts, setIsLoadingPosts] = useState(true)
+  
+  // State for posts the user has liked
+  const [likedPosts, setLikedPosts] = useState<Post[]>([])
+  const [isLoadingLikedPosts, setIsLoadingLikedPosts] = useState(true)
+
+  // General page state
   const [pageError, setPageError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -65,7 +73,9 @@ export default function PostsPage() {
   const [formFeedback, setFormFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null)
 
   useEffect(() => {
+    // Load both the user's uploaded posts and the posts they've liked
     void loadUserPosts()
+    void loadLikedPosts()
   }, [])
 
   useEffect(() => {
@@ -115,6 +125,66 @@ export default function PostsPage() {
       setPageError(error instanceof Error ? error.message : "We could not load your posts.")
     } finally {
       setIsLoadingPosts(false)
+    }
+  }
+
+  /**
+   * Fetches the posts that the authenticated user has swiped "like" on.
+   * We query the `swipes` table and use Supabase's foreign key relationships
+   * to automatically fetch the adjoining data from the `posts` table in a single request.
+   */
+  async function loadLikedPosts() {
+    setIsLoadingLikedPosts(true)
+    setPageError(null)
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
+
+      if (userError) {
+        throw userError
+      }
+
+      if (!user) {
+        throw new Error("You must be signed in to view your liked posts.")
+      }
+
+      // Fetch swipes where the user liked a post, and join the referenced post data.
+      const { data, error } = await supabase
+        .from("swipes")
+        .select(`
+          created_at,
+          posts (
+            id, title, description, visibility, video_url, likes_count, comments_count, created_at
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("direction", "like")
+        .order("created_at", { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      // Map the nested post objects returned by the join query into our UI Post model.
+      // We filter out any null posts in case a referenced post was deleted.
+      const mappedPosts = await Promise.all(
+        (data ?? [])
+          .map((row: any) => row.posts)
+          .filter(Boolean)
+          .map((postRow: any) => mapPostRowToPost(postRow as PostRow))
+      )
+      
+      setLikedPosts(mappedPosts)
+    } catch (error) {
+      // We don't overwrite pageError if loadUserPosts already set an error, 
+      // but in a real app we might want to handle separate error states for each tab.
+      setPageError((prev) => prev || (error instanceof Error ? error.message : "We could not load your liked posts."))
+    } finally {
+      setIsLoadingLikedPosts(false)
     }
   }
 
@@ -262,18 +332,66 @@ export default function PostsPage() {
     return vis.charAt(0).toUpperCase() + vis.slice(1)
   }
 
+  /**
+   * Renders a consistent card for displaying a video post.
+   * We encapsulate this here so both "My Posts" and "Liked Videos" tabs
+   * share the identical visual representation of a post, ensuring consistency
+   * and reducing code duplication.
+   */
+  function renderPostCard(post: Post) {
+    return (
+      <div key={post.id} className="overflow-hidden rounded-xl border border-border bg-card transition-transform hover:scale-[1.01]">
+        <div className="relative aspect-[9/16] bg-secondary">
+          <video src={post.videoUrl} className="h-full w-full object-cover" controls preload="metadata" />
+          <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-sm font-medium text-white">
+            <Play className="h-4 w-4 fill-white" />
+            Video
+          </div>
+        </div>
+
+        <div className="space-y-3 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs font-medium text-foreground">
+              {getVisibilityIcon(post.visibility)}
+              {getVisibilityLabel(post.visibility)}
+            </span>
+          </div>
+
+          <div>
+            <h3 className="mb-1 line-clamp-1 font-semibold text-foreground">{post.title}</h3>
+            <p className="line-clamp-2 text-sm text-muted-foreground">{post.description || "No description provided."}</p>
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{post.createdAt}</span>
+            <div className="flex items-center gap-3">
+              <span>{post.likes} likes</span>
+              <span className="inline-flex items-center gap-1">
+                <MessageCircle className="h-3.5 w-3.5" />
+                {post.comments}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 p-4 backdrop-blur-sm lg:p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">My Posts</h1>
-            <p className="text-sm text-muted-foreground">Upload new videos and review every post you have already shared.</p>
+            <h1 className="text-2xl font-bold text-foreground">Posts</h1>
+            <p className="text-sm text-muted-foreground">Upload new videos and manage your library of liked content.</p>
           </div>
           <button
-            onClick={() => void loadUserPosts()}
+            onClick={() => {
+              void loadUserPosts()
+              void loadLikedPosts()
+            }}
             className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-            disabled={isLoadingPosts}
+            disabled={isLoadingPosts || isLoadingLikedPosts}
           >
             Refresh
           </button>
@@ -405,75 +523,84 @@ export default function PostsPage() {
         </div>
 
         <div className="p-4 pb-24 lg:p-6 lg:pb-6">
-          <div className="mb-6 flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold text-foreground">Uploaded Videos</h2>
-              <p className="text-sm text-muted-foreground">Your personal post library</p>
-            </div>
-            <div className="rounded-full bg-secondary px-3 py-1 text-sm text-muted-foreground">{posts.length} posts</div>
-          </div>
-
-          {pageError && (
-            <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {pageError}
-            </div>
-          )}
-
-          {isLoadingPosts ? (
-            <div className="flex min-h-[240px] items-center justify-center rounded-xl border border-dashed border-border bg-card">
-              <div className="flex items-center gap-3 text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                Loading your posts...
+          <Tabs defaultValue="my-posts" className="w-full">
+            <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Video Library</h2>
+                <p className="text-sm text-muted-foreground">Switch between your uploads and liked content</p>
               </div>
+              <TabsList>
+                <TabsTrigger value="my-posts">My Posts</TabsTrigger>
+                <TabsTrigger value="liked-posts">Liked Videos</TabsTrigger>
+              </TabsList>
             </div>
-          ) : posts.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {posts.map((post) => (
-                <div key={post.id} className="overflow-hidden rounded-xl border border-border bg-card transition-transform hover:scale-[1.01]">
-                  <div className="relative aspect-[9/16] bg-secondary">
-                    <video src={post.videoUrl} className="h-full w-full object-cover" controls preload="metadata" />
-                    <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-sm font-medium text-white">
-                      <Play className="h-4 w-4 fill-white" />
-                      Video
-                    </div>
-                  </div>
 
-                  <div className="space-y-3 p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs font-medium text-foreground">
-                        {getVisibilityIcon(post.visibility)}
-                        {getVisibilityLabel(post.visibility)}
-                      </span>
-                    </div>
+            {pageError && (
+              <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {pageError}
+              </div>
+            )}
 
-                    <div>
-                      <h3 className="mb-1 line-clamp-1 font-semibold text-foreground">{post.title}</h3>
-                      <p className="line-clamp-2 text-sm text-muted-foreground">{post.description || "No description provided."}</p>
-                    </div>
+            {/* My Posts Tab */}
+            <TabsContent value="my-posts" className="mt-0 space-y-4">
+              <div className="flex items-center justify-end">
+                <div className="rounded-full bg-secondary px-3 py-1 text-sm text-muted-foreground">
+                  {posts.length} {posts.length === 1 ? 'post' : 'posts'}
+                </div>
+              </div>
 
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{post.createdAt}</span>
-                      <div className="flex items-center gap-3">
-                        <span>{post.likes} likes</span>
-                        <span className="inline-flex items-center gap-1">
-                          <MessageCircle className="h-3.5 w-3.5" />
-                          {post.comments}
-                        </span>
-                      </div>
-                    </div>
+              {isLoadingPosts ? (
+                <div className="flex min-h-[240px] items-center justify-center rounded-xl border border-dashed border-border bg-card">
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Loading your posts...
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 text-center">
-              <div className="mb-4 rounded-full bg-secondary p-4">
-                <Upload className="h-8 w-8 text-muted-foreground" />
+              ) : posts.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {posts.map(renderPostCard)}
+                </div>
+              ) : (
+                <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 text-center">
+                  <div className="mb-4 rounded-full bg-secondary p-4">
+                    <Upload className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <h3 className="mb-2 text-xl font-semibold text-foreground">No posts yet</h3>
+                  <p className="max-w-md text-muted-foreground">Upload your first video post to start building a catalog of performances, rehearsals, and demos.</p>
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Liked Videos Tab */}
+            <TabsContent value="liked-posts" className="mt-0 space-y-4">
+              <div className="flex items-center justify-end">
+                <div className="rounded-full bg-secondary px-3 py-1 text-sm text-muted-foreground">
+                  {likedPosts.length} {likedPosts.length === 1 ? 'liked video' : 'liked videos'}
+                </div>
               </div>
-              <h3 className="mb-2 text-xl font-semibold text-foreground">No posts yet</h3>
-              <p className="max-w-md text-muted-foreground">Upload your first video post to start building a catalog of performances, rehearsals, and demos.</p>
-            </div>
-          )}
+
+              {isLoadingLikedPosts ? (
+                <div className="flex min-h-[240px] items-center justify-center rounded-xl border border-dashed border-border bg-card">
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Loading liked videos...
+                  </div>
+                </div>
+              ) : likedPosts.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {likedPosts.map(renderPostCard)}
+                </div>
+              ) : (
+                <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 text-center">
+                  <div className="mb-4 rounded-full bg-secondary p-4">
+                    <Play className="ml-1 h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <h3 className="mb-2 text-xl font-semibold text-foreground">No liked videos</h3>
+                  <p className="max-w-md text-muted-foreground">Swipe right on videos in the discovery feed to add them to your liked videos collection.</p>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

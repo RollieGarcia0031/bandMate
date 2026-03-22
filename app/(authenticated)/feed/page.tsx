@@ -135,7 +135,7 @@ function formatPlaybackTime(valueInSeconds: number) {
  * smaller drag snaps back so taps, playback adjustments, and tiny drifts do
  * not accidentally like or dislike the video.
  */
-const SWIPE_THRESHOLD_PX = 120
+const SWIPE_THRESHOLD_PX = 80
 
 /**
  * Apply the viewer's latest swipe locally so the dialog stats stay consistent
@@ -831,18 +831,18 @@ export default function FeedPage() {
         }
 
         setPosts((currentPosts) =>
-          currentPosts.map((post) => (post.id === postId ? applyViewerSwipeToPost(post, direction) : post)),
+          currentPosts.filter((post) => post.id !== postId),
         )
 
+        // After removing, the next post becomes the current post at the SAME index.
+        // We don't need to call scrollToPostAtIndex(nextIndex) if we removed the current one,
+        // unless we want to trigger the play logic for the new current item.
         const currentIndex = posts.findIndex((post) => post.id === postId)
-        const nextIndex = Math.min(currentIndex + 1, posts.length - 1)
+        const nextPost = posts[currentIndex + 1] || posts[currentIndex - 1]
 
-        if (nextIndex !== currentIndex) {
-          scrollToPostAtIndex(nextIndex)
-          return
+        if (nextPost) {
+          void playVideoById(nextPost.id)
         }
-
-        void playVideoById(postId)
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "We could not save your swipe.")
       }
@@ -910,15 +910,38 @@ export default function FeedPage() {
 
     try {
       const supabase = createSupabaseBrowserClient()
+
+      // Fetch IDs of posts the user has already swiped on so we can exclude them from the feed query.
+      let swipedPostIds: string[] = []
+      if (viewerUserId) {
+        const { data: swipesData, error: swipesError } = await supabase
+          .from("swipes")
+          .select("post_id")
+          .eq("user_id", viewerUserId)
+
+        if (swipesError) {
+          console.error("Error fetching swiped posts:", swipesError)
+        } else if (swipesData) {
+          swipedPostIds = swipesData.map((s) => s.post_id)
+        }
+      }
+
       let query = supabase
         .from("posts")
-        .select("id, user_id, title, description, visibility, video_url, likes_count, dislikes_count, comments_count, created_at, profiles!inner(display_name, username)")
+        .select(
+          "id, user_id, title, description, visibility, video_url, likes_count, dislikes_count, comments_count, created_at, profiles!inner(display_name, username)",
+        )
         .eq("visibility", "public")
         .order("created_at", { ascending: false })
         .order("likes_count", { ascending: false })
 
       if (viewerUserId) {
         query = query.neq("user_id", viewerUserId)
+
+        // Exclude swiped posts. We use the 'not.in' filter with the list of collected IDs.
+        if (swipedPostIds.length > 0) {
+          query = query.not("id", "in", `(${swipedPostIds.join(",")})`)
+        }
       }
 
       const { data, error } = await query

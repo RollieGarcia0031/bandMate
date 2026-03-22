@@ -109,14 +109,14 @@ export function getPostVideoReferenceDebugInfo(videoReference: string): PostVide
  * normalizes those legacy shapes before requesting a fresh signed URL so feed
  * and library pages can play both new and old videos reliably.
  */
-export async function resolvePostVideoUrl(videoReference: string) {
+export async function resolvePostVideoUrl(videoReference: string, client?: any) {
   const debugInfo = getPostVideoReferenceDebugInfo(videoReference)
 
   if (debugInfo.normalizedStoragePath === null) {
     return videoReference
   }
 
-  const supabase = createSupabaseBrowserClient()
+  const supabase = client || createSupabaseBrowserClient()
   const { data, error } = await supabase.storage
     .from(USER_POSTS_BUCKET)
     .createSignedUrl(debugInfo.normalizedStoragePath, 60 * 60)

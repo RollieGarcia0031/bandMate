@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { Loader2, Music, MapPin, Search, Sliders, Users, UserRound, ChevronDown, ChevronUp } from "lucide-react"
@@ -328,8 +329,9 @@ export default function SearchPage() {
           ) : results.length > 0 ? (
             <div className="grid gap-4">
               {results.map((profile) => (
-                <div 
+                <Link 
                   key={profile.id}
+                  href={`/user/${profile.id}`}
                   className="group flex flex-col sm:flex-row items-start gap-4 p-4 rounded-2xl bg-card border border-border hover:border-primary/50 transition-all cursor-pointer"
                 >
                   <div className="relative w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-full overflow-hidden bg-secondary border-2 border-border group-hover:border-primary transition-colors">
@@ -373,7 +375,7 @@ export default function SearchPage() {
                       ))}
                     </div>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           ) : !isSearching && searchQuery && (

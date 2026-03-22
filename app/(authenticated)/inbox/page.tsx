@@ -6,7 +6,7 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { supabase_config } from "@/lib/supabase/config"
-import { getTheyLikedYouCounts } from "./actions"
+import { getTheyLikedYouCounts, getUserConversations } from "./actions"
 import {
   Select,
   SelectContent,
@@ -15,45 +15,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-// Mock conversations - will be replaced with Supabase data
-const mockConversations = [
-  {
-    id: "1",
-    name: "Alex Rivera",
-    lastMessage: "That sounds great! When do you want to jam?",
-    timestamp: "2m ago",
-    unread: true,
-    avatar: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=100&h=100&fit=crop",
-    isMatch: true,
-  },
-  {
-    id: "2",
-    name: "Maya Chen",
-    lastMessage: "I listened to your demo, loved it!",
-    timestamp: "1h ago",
-    unread: true,
-    avatar: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=100&h=100&fit=crop",
-    isMatch: false,
-  },
-  {
-    id: "3",
-    name: "Jordan Brooks",
-    lastMessage: "Let me know if you need a drummer for your project",
-    timestamp: "3h ago",
-    unread: false,
-    avatar: "https://images.unsplash.com/photo-1519892300165-cb5542fb47c7?w=100&h=100&fit=crop",
-    isMatch: false,
-  },
-  {
-    id: "4",
-    name: "Sam Taylor",
-    lastMessage: "The bass line I sent, what do you think?",
-    timestamp: "1d ago",
-    unread: false,
-    avatar: "https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=100&h=100&fit=crop",
-    isMatch: false,
-  },
-]
+type ConversationItem = {
+  id: string
+  matchId: string
+  name: string
+  lastMessage: string
+  timestamp: string
+  relativeTime: string
+  unread: boolean
+  avatar: string
+  uploadedAt: string | null
+}
 
 // Matches will be fetched from Supabase
 type MatchItem = {
@@ -70,7 +42,9 @@ type TabType = "messages" | "matches"
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<TabType>("messages")
   const [matches, setMatches] = useState<MatchItem[]>([])
+  const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [isLoadingMatches, setIsLoadingMatches] = useState(true)
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true)
   const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
 
   const sortedMatches = [...matches].sort((a, b) => {
@@ -85,6 +59,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     void loadMatches()
+    void loadConversations()
   }, [])
 
   /**
@@ -205,10 +180,51 @@ export default function InboxPage() {
     }
   }
 
+  async function loadConversations() {
+    setIsLoadingConversations(true)
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const data = await getUserConversations(user.id)
+      
+      // Resolve avatar URLs
+      const mapped: ConversationItem[] = (data || []).map((conv: any) => {
+        let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
+        const cacheBuster = conv.uploadedAt ? `v=${encodeURIComponent(conv.uploadedAt)}` : ""
+
+        if (conv.avatar) {
+          if (conv.avatar.startsWith("http")) {
+            avatarUrl = conv.avatar
+            if (cacheBuster) {
+              avatarUrl = `${avatarUrl}${avatarUrl.includes("?") ? "&" : "?"}${cacheBuster}`
+            }
+          } else {
+            const publicUrl = supabase.storage
+              .from(supabase_config.storageBuckets.profilePhotos)
+              .getPublicUrl(conv.avatar).data.publicUrl
+            avatarUrl = cacheBuster ? `${publicUrl}?${cacheBuster}` : publicUrl
+          }
+        }
+        return {
+          ...conv,
+          avatar: avatarUrl
+        }
+      })
+
+      setConversations(mapped)
+    } catch (error) {
+      console.error("Error loading conversations:", error)
+    } finally {
+      setIsLoadingConversations(false)
+    }
+  }
+
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border p-4 lg:p-6">
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border p-4 lg:p-6 safe-area-pt">
         <h1 className="text-2xl font-bold text-foreground mb-4">Inbox</h1>
 
         {/* Tabs */}
@@ -274,11 +290,15 @@ export default function InboxPage() {
 
           {/* Conversations */}
           <div className="divide-y divide-border">
-            {mockConversations.length > 0 ? (
-              mockConversations.map((conversation) => (
+            {isLoadingConversations ? (
+              <div className="flex justify-center items-center py-20 px-4">
+                <Loader2 className="w-10 h-10 text-muted-foreground animate-spin" />
+              </div>
+            ) : conversations.length > 0 ? (
+              conversations.map((conversation) => (
                 <Link
                   key={conversation.id}
-                  href={`/inbox/${conversation.id}`}
+                  href={`/inbox/${conversation.matchId}`}
                   className="flex items-center gap-4 p-4 lg:p-6 hover:bg-card/50 transition-colors"
                 >
                   <div className="relative">
@@ -303,14 +323,14 @@ export default function InboxPage() {
                         {conversation.name}
                       </h3>
                       <span className="text-xs text-muted-foreground">
-                        {conversation.timestamp}
+                        {conversation.relativeTime || conversation.timestamp}
                       </span>
                     </div>
                     <p
                       className={cn(
                         "text-sm truncate",
                         conversation.unread
-                          ? "text-foreground"
+                          ? "text-foreground font-medium"
                           : "text-muted-foreground"
                       )}
                     >

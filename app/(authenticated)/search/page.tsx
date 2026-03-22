@@ -1,10 +1,13 @@
 "use client"
 
-import { useState } from "react"
-import { Search, Sliders, Music, MapPin, Users } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import { Loader2, Music, MapPin, Search, Sliders, Users, UserRound, ChevronDown, ChevronUp } from "lucide-react"
+import { useEffect, useState } from "react"
+import { supabase_config } from "@/lib/supabase/config"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 const genres = ["Rock", "Pop", "Jazz", "Electronic", "Hip Hop", "R&B", "Country", "Classical", "Metal", "Folk", "Indie", "Blues"]
 const instruments = ["Guitar", "Bass", "Drums", "Piano", "Vocals", "Violin", "Saxophone", "Trumpet", "DJ", "Production"]
@@ -15,22 +18,156 @@ const trendingSearches = [
   { label: "Bands forming near me", icon: MapPin },
 ]
 
+type SearchResult = {
+  id: string
+  username: string
+  displayName: string
+  bio: string
+  city: string
+  instruments: string[]
+  genres: string[]
+  avatar: string
+}
+
 export default function SearchPage() {
   const [searchQuery, setSearchQuery] = useState("")
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
-  const [selectedInstruments, setSelectedInstruments] = useState<string[]>([])
+  const [pendingGenres, setPendingGenres] = useState<string[]>([])
+  const [pendingInstruments, setPendingInstruments] = useState<string[]>([])
+  const [appliedGenres, setAppliedGenres] = useState<string[]>([])
+  const [appliedInstruments, setAppliedInstruments] = useState<string[]>([])
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) =>
+    setPendingGenres((prev) =>
       prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]
     )
   }
 
   const toggleInstrument = (instrument: string) => {
-    setSelectedInstruments((prev) =>
+    setPendingInstruments((prev) =>
       prev.includes(instrument) ? prev.filter((i) => i !== instrument) : [...prev, instrument]
     )
   }
+
+  const applyFilters = () => {
+    setAppliedGenres(pendingGenres)
+    setAppliedInstruments(pendingInstruments)
+    // We close the filter panel if you clicked apply, as it's a clear action point.
+    setIsFiltersOpen(false)
+  }
+
+  const clearPendingFilters = () => {
+    setPendingGenres([])
+    setPendingInstruments([])
+  }
+
+  const performSearch = async () => {
+    setIsSearching(true)
+    setError(null)
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+
+      // We start by building a query for profiles. 
+      // We join user_instruments and user_genres to allow filtering and displaying those tags.
+      let query = supabase
+        .from("profiles")
+        .select(`
+          id,
+          username,
+          display_name,
+          bio,
+          city,
+          user_instruments (
+            instruments (name)
+          ),
+          user_genres (
+            genres (name)
+          ),
+          profile_photos (
+            url,
+            uploaded_at
+          )
+        `)
+
+      // If there's a search query, we filter by username or display_name.
+      if (searchQuery.trim()) {
+        const textQuery = `%${searchQuery.trim()}%`
+        query = query.or(`username.ilike.${textQuery},display_name.ilike.${textQuery}`)
+      }
+
+      const { data, error: searchError } = await query.limit(50)
+
+      if (searchError) {
+        throw searchError
+      }
+
+      // We process the nested relational data into a flat array of SearchResult objects.
+      let mappedResults: SearchResult[] = (data ?? []).map((row: any) => {
+        const instruments = (row.user_instruments ?? [])
+          .map((ui: any) => ui.instruments?.name)
+          .filter(Boolean)
+        
+        const genres = (row.user_genres ?? [])
+          .map((ug: any) => ug.genres?.name)
+          .filter(Boolean)
+
+        const photo = row.profile_photos?.[0]
+        let avatar = ""
+        if (photo?.url) {
+          const publicUrl = supabase.storage
+            .from(supabase_config.storageBuckets.profilePhotos)
+            .getPublicUrl(photo.url).data.publicUrl
+          
+          avatar = photo.uploaded_at ? `${publicUrl}?v=${encodeURIComponent(photo.uploaded_at)}` : publicUrl
+        }
+
+        return {
+          id: row.id,
+          username: row.username,
+          displayName: row.display_name,
+          bio: row.bio || "",
+          city: row.city || "",
+          instruments,
+          genres,
+          avatar
+        }
+      })
+
+      // If explicit filters are selected, we perform client-side filtering for better control 
+      // over "one of" vs "all of" logic during this initial implementation phase.
+      if (appliedGenres.length > 0) {
+        mappedResults = mappedResults.filter(profile => 
+          appliedGenres.some(genre => profile.genres.includes(genre))
+        )
+      }
+
+      if (appliedInstruments.length > 0) {
+        mappedResults = mappedResults.filter(profile => 
+          appliedInstruments.some(inst => profile.instruments.includes(inst))
+        )
+      }
+
+      setResults(mappedResults)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Search failed. Please try again.")
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  // Automatically trigger a search when the query or *applied* filters change.
+  // This ensures text remains reactive while tags only apply on click.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      void performSearch()
+    }, 400)
+
+    return () => clearTimeout(timeout)
+  }, [searchQuery, appliedGenres, appliedInstruments])
 
   return (
     <div className="min-h-screen p-4 lg:p-8">
@@ -41,90 +178,216 @@ export default function SearchPage() {
           <p className="text-muted-foreground">Find musicians that match your vibe</p>
         </div>
 
-        {/* Search Input */}
-        <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name, instrument, or location..."
-            className="pl-12 pr-12 h-14 text-lg bg-card border-border"
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 top-1/2 -translate-y-1/2"
-          >
-            <Sliders className="w-5 h-5" />
-          </Button>
-        </div>
-
-        {/* Trending Searches */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-foreground">Trending</h2>
-          <div className="space-y-2">
-            {trendingSearches.map((item) => (
-              <button
-                key={item.label}
-                className="flex items-center gap-4 w-full p-4 rounded-xl bg-card hover:bg-secondary transition-colors text-left"
-              >
-                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-secondary">
-                  <item.icon className="w-5 h-5 text-primary" />
-                </div>
-                <span className="text-foreground">{item.label}</span>
-              </button>
-            ))}
+        {/* Search Input and Collapsible Toggle */}
+        <Collapsible open={isFiltersOpen} onOpenChange={setIsFiltersOpen} className="space-y-4">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by name, instrument, or location..."
+              className="pl-12 pr-16 h-14 text-lg bg-card border-border"
+            />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "flex items-center gap-2 px-3 h-10 transition-colors",
+                    isFiltersOpen ? "bg-secondary text-primary" : "text-muted-foreground"
+                  )}
+                >
+                  <Sliders className="w-4 h-4" />
+                  <span className="hidden sm:inline text-xs font-semibold uppercase tracking-wider">Filters</span>
+                  {isFiltersOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </Button>
+              </CollapsibleTrigger>
+            </div>
           </div>
-        </div>
 
-        {/* Genre Filter */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-foreground">Genres</h2>
-          <div className="flex flex-wrap gap-2">
-            {genres.map((genre) => (
-              <button
-                key={genre}
-                onClick={() => toggleGenre(genre)}
-                className={cn(
-                  "px-4 py-2 rounded-full text-sm font-medium transition-all",
-                  selectedGenres.includes(genre)
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-card text-foreground hover:bg-secondary"
+          <CollapsibleContent className="space-y-8 p-6 rounded-2xl bg-card border border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200">
+            {/* Genre Filter */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-[0.1em] text-muted-foreground">Genres</h2>
+                {pendingGenres.length > 0 && (
+                  <Button variant="ghost" size="sm" onClick={() => setPendingGenres([])} className="h-7 text-xs text-primary">
+                    Clear ({pendingGenres.length})
+                  </Button>
                 )}
-              >
-                {genre}
-              </button>
-            ))}
-          </div>
-        </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {genres.map((genre) => (
+                  <button
+                    key={genre}
+                    onClick={() => toggleGenre(genre)}
+                    className={cn(
+                      "px-4 py-1.5 rounded-full text-sm font-medium transition-all border",
+                      pendingGenres.includes(genre)
+                        ? "bg-primary border-primary text-primary-foreground shadow-sm"
+                        : "bg-background border-border text-foreground hover:bg-secondary hover:border-border"
+                    )}
+                  >
+                    {genre}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        {/* Instrument Filter */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-foreground">Instruments</h2>
-          <div className="flex flex-wrap gap-2">
-            {instruments.map((instrument) => (
-              <button
-                key={instrument}
-                onClick={() => toggleInstrument(instrument)}
-                className={cn(
-                  "px-4 py-2 rounded-full text-sm font-medium transition-all",
-                  selectedInstruments.includes(instrument)
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-card text-foreground hover:bg-secondary"
+            {/* Instrument Filter */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-[0.1em] text-muted-foreground">Instruments</h2>
+                {pendingInstruments.length > 0 && (
+                  <Button variant="ghost" size="sm" onClick={() => setPendingInstruments([])} className="h-7 text-xs text-primary">
+                    Clear ({pendingInstruments.length})
+                  </Button>
                 )}
-              >
-                {instrument}
-              </button>
-            ))}
-          </div>
-        </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {instruments.map((instrument) => (
+                  <button
+                    key={instrument}
+                    onClick={() => toggleInstrument(instrument)}
+                    className={cn(
+                      "px-4 py-1.5 rounded-full text-sm font-medium transition-all border",
+                      pendingInstruments.includes(instrument)
+                        ? "bg-primary border-primary text-primary-foreground shadow-sm"
+                        : "bg-background border-border text-foreground hover:bg-secondary hover:border-border"
+                    )}
+                  >
+                    {instrument}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        {/* Apply Button */}
-        {(selectedGenres.length > 0 || selectedInstruments.length > 0) && (
-          <Button className="w-full h-14 text-lg">
-            Apply Filters ({selectedGenres.length + selectedInstruments.length})
-          </Button>
+            {/* Apply and Reset Actions */}
+            <div className="pt-6 border-t border-border flex flex-col sm:flex-row gap-3">
+              <Button 
+                onClick={applyFilters}
+                className="flex-1 h-12 bg-primary text-primary-foreground font-bold text-base shadow-sm hover:opacity-90"
+              >
+                Apply Filters ({pendingGenres.length + pendingInstruments.length})
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={clearPendingFilters}
+                className="sm:w-32 h-12 border-border hover:bg-secondary"
+              >
+                Reset
+              </Button>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+
+        {/* Trending Searches (Only show when filters are closed and no results yet) */}
+        {!isFiltersOpen && results.length === 0 && !isSearching && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold text-foreground">Trending Searches</h2>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {trendingSearches.map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => setSearchQuery(item.label.split(' in ')[0])}
+                  className="flex items-center gap-4 w-full p-4 rounded-xl bg-card border border-border hover:bg-secondary hover:border-primary/30 transition-all text-left group"
+                >
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-secondary group-hover:bg-primary/10 transition-colors">
+                    <item.icon className="w-5 h-5 text-primary" />
+                  </div>
+                  <span className="text-sm font-medium text-foreground">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
+
+        {/* Results Section */}
+        <div className="space-y-6 pb-20">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-foreground">
+              {isSearching ? "Searching..." : results.length > 0 ? "Results" : searchQuery ? "No results found" : "Discover Musicians"}
+            </h2>
+            {results.length > 0 && (
+              <span className="text-sm text-muted-foreground">{results.length} musicians found</span>
+            )}
+          </div>
+
+          {error && (
+            <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+              {error}
+            </div>
+          )}
+
+          {isSearching && results.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-4">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <p>Finding the best matches...</p>
+            </div>
+          ) : results.length > 0 ? (
+            <div className="grid gap-4">
+              {results.map((profile) => (
+                <div 
+                  key={profile.id}
+                  className="group flex flex-col sm:flex-row items-start gap-4 p-4 rounded-2xl bg-card border border-border hover:border-primary/50 transition-all cursor-pointer"
+                >
+                  <div className="relative w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-full overflow-hidden bg-secondary border-2 border-border group-hover:border-primary transition-colors">
+                    {profile.avatar ? (
+                      <img src={profile.avatar} alt={profile.displayName} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                        <UserRound className="w-8 h-8" />
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-lg font-bold text-foreground leading-none">{profile.displayName}</h3>
+                        <p className="text-sm text-muted-foreground mt-1">@{profile.username}</p>
+                      </div>
+                      {profile.city && (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
+                          <MapPin className="w-3 h-3" />
+                          {profile.city}
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="text-sm text-foreground line-clamp-2 italic">
+                      {profile.bio || "No bio provided yet."}
+                    </p>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {profile.instruments.map(inst => (
+                        <span key={inst} className="px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-semibold">
+                          {inst}
+                        </span>
+                      ))}
+                      {profile.genres.map(genre => (
+                        <span key={genre} className="px-2 py-0.5 rounded-md bg-secondary text-foreground text-xs font-semibold">
+                          {genre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : !isSearching && searchQuery && (
+            <div className="text-center py-20 space-y-4">
+              <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto">
+                <Search className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-foreground font-semibold">No musicians match "{searchQuery}"</p>
+                <p className="text-sm text-muted-foreground">Try adjusting your filters or search terms.</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

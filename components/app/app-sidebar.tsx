@@ -3,6 +3,8 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Home, Search, MessageCircle, User, Music2, Video } from "lucide-react"
+import { useProfile } from "@/hooks/use-profile"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
   { href: "/feed", label: "Feed", icon: Home },
@@ -14,6 +16,7 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const { profile, loading } = useProfile()
 
   return (
     <aside className="hidden lg:flex flex-col w-64 h-screen bg-card border-r border-border fixed left-0 top-0">
@@ -53,15 +56,32 @@ export function AppSidebar() {
 
       {/* Bottom section */}
       <div className="p-4 border-t border-border">
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
-          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-            <User className="w-5 h-5 text-muted-foreground" />
+        {loading ? (
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 animate-pulse">
+            <div className="w-10 h-10 rounded-full bg-muted" />
+            <div className="flex-1 space-y-2">
+              <div className="h-4 bg-muted rounded w-3/4" />
+              <div className="h-3 bg-muted rounded w-1/2" />
+            </div>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-foreground truncate">Guest User</p>
-            <p className="text-xs text-muted-foreground">@guest</p>
-          </div>
-        </div>
+        ) : (
+          <Link 
+            href="/me"
+            className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 hover:bg-secondary transition-colors group"
+          >
+            <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center border border-border">
+              <User className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
+                {profile?.displayName || "User"}
+              </p>
+              <p className="text-xs text-muted-foreground truncate">
+                {profile?.username ? `@${profile.username}` : "Profile not set"}
+              </p>
+            </div>
+          </Link>
+        )}
       </div>
     </aside>
   )

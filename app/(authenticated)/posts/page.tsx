@@ -61,6 +61,10 @@ export default function PostsPage() {
   const [likedPosts, setLikedPosts] = useState<Post[]>([])
   const [isLoadingLikedPosts, setIsLoadingLikedPosts] = useState(true)
 
+  // State for posts the user has disliked (passed on)
+  const [dislikedPosts, setDislikedPosts] = useState<Post[]>([])
+  const [isLoadingDislikedPosts, setIsLoadingDislikedPosts] = useState(true)
+
   // General page state
   const [pageError, setPageError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -73,9 +77,10 @@ export default function PostsPage() {
   const [formFeedback, setFormFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null)
 
   useEffect(() => {
-    // Load both the user's uploaded posts and the posts they've liked
+    // Load the user's uploaded posts, liked posts, and disliked posts
     void loadUserPosts()
     void loadLikedPosts()
+    void loadDislikedPosts()
   }, [])
 
   useEffect(() => {
@@ -185,6 +190,62 @@ export default function PostsPage() {
       setPageError((prev) => prev || (error instanceof Error ? error.message : "We could not load your liked posts."))
     } finally {
       setIsLoadingLikedPosts(false)
+    }
+  }
+
+  /**
+   * Fetches the posts that the authenticated user has swiped "pass" on.
+   * This allows users to review content they previously skipped in the feed.
+   */
+  async function loadDislikedPosts() {
+    setIsLoadingDislikedPosts(true)
+    setPageError(null)
+
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
+
+      if (userError) {
+        throw userError
+      }
+
+      if (!user) {
+        throw new Error("You must be signed in to view your disliked posts.")
+      }
+
+      // Fetch swipes where the user passed on a post, and join the referenced post data.
+      const { data, error } = await supabase
+        .from("swipes")
+        .select(`
+          created_at,
+          posts (
+            id, title, description, visibility, video_url, likes_count, comments_count, created_at
+          )
+        `)
+        .eq("user_id", user.id)
+        .eq("direction", "pass")
+        .order("created_at", { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      // Map the nested post objects into our Post model.
+      const mappedPosts = await Promise.all(
+        (data ?? [])
+          .map((row: any) => row.posts)
+          .filter(Boolean)
+          .map((postRow: any) => mapPostRowToPost(postRow as PostRow))
+      )
+      
+      setDislikedPosts(mappedPosts)
+    } catch (error) {
+      setPageError((prev) => prev || (error instanceof Error ? error.message : "We could not load your disliked posts."))
+    } finally {
+      setIsLoadingDislikedPosts(false)
     }
   }
 
@@ -389,9 +450,10 @@ export default function PostsPage() {
             onClick={() => {
               void loadUserPosts()
               void loadLikedPosts()
+              void loadDislikedPosts()
             }}
             className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-            disabled={isLoadingPosts || isLoadingLikedPosts}
+            disabled={isLoadingPosts || isLoadingLikedPosts || isLoadingDislikedPosts}
           >
             Refresh
           </button>
@@ -532,6 +594,7 @@ export default function PostsPage() {
               <TabsList>
                 <TabsTrigger value="my-posts">My Posts</TabsTrigger>
                 <TabsTrigger value="liked-posts">Liked Videos</TabsTrigger>
+                <TabsTrigger value="disliked-posts">Disliked Videos</TabsTrigger>
               </TabsList>
             </div>
 
@@ -597,6 +660,36 @@ export default function PostsPage() {
                   </div>
                   <h3 className="mb-2 text-xl font-semibold text-foreground">No liked videos</h3>
                   <p className="max-w-md text-muted-foreground">Swipe right on videos in the discovery feed to add them to your liked videos collection.</p>
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Disliked Videos Tab */}
+            <TabsContent value="disliked-posts" className="mt-0 space-y-4">
+              <div className="flex items-center justify-end">
+                <div className="rounded-full bg-secondary px-3 py-1 text-sm text-muted-foreground">
+                  {dislikedPosts.length} {dislikedPosts.length === 1 ? 'disliked video' : 'disliked videos'}
+                </div>
+              </div>
+
+              {isLoadingDislikedPosts ? (
+                <div className="flex min-h-[240px] items-center justify-center rounded-xl border border-dashed border-border bg-card">
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Loading disliked videos...
+                  </div>
+                </div>
+              ) : dislikedPosts.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {dislikedPosts.map(renderPostCard)}
+                </div>
+              ) : (
+                <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 text-center">
+                  <div className="mb-4 rounded-full bg-secondary p-4">
+                    <X className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <h3 className="mb-2 text-xl font-semibold text-foreground">No disliked videos</h3>
+                  <p className="max-w-md text-muted-foreground">Videos you've swiped left on in the discovery feed will appear here.</p>
                 </div>
               )}
             </TabsContent>

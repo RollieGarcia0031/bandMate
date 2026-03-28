@@ -1,6 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { revalidateProfileTag } from "@/lib/cache"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { getSupabaseServerEnv } from "@/lib/supabase/env"
 import { supabase_config } from "@/lib/supabase/config"
@@ -78,6 +79,7 @@ export async function saveSettingsAction(payload: SettingsFormData): Promise<Sav
     return syncGenres
   }
 
+  revalidateProfileTag(user.id)
   revalidatePath("/settings")
   revalidatePath("/me")
 

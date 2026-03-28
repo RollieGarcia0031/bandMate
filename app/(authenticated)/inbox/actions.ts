@@ -1,5 +1,12 @@
 "use server"
 
+import {
+  cacheKeys,
+  cacheTags,
+  revalidateConversationsTag,
+  revalidateMessagesTag,
+  runCachedQuery,
+} from "@/lib/cache"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 
 /**
@@ -41,7 +48,7 @@ export async function getOrCreateConversation(matchId: string) {
   const supabase = createSupabaseAdminClient()
 
   // Try to find existing conversation
-  const { data: existing, error: fetchError } = await supabase
+  const { data: existing } = await supabase
     .from("conversations")
     .select("id")
     .eq("match_id", matchId)
@@ -61,6 +68,17 @@ export async function getOrCreateConversation(matchId: string) {
     throw createError
   }
 
+  const { data: match } = await supabase
+    .from("matches")
+    .select("user1_id, user2_id")
+    .eq("id", matchId)
+    .maybeSingle()
+
+  if (match) {
+    revalidateConversationsTag(match.user1_id)
+    revalidateConversationsTag(match.user2_id)
+  }
+
   return created.id
 }
 
@@ -68,19 +86,25 @@ export async function getOrCreateConversation(matchId: string) {
  * Fetches message history for a conversation.
  */
 export async function getConversationMessages(conversationId: string) {
-  const supabase = createSupabaseAdminClient()
-  const { data, error } = await supabase
-    .from("messages")
-    .select("*")
-    .eq("conversation_id", conversationId)
-    .order("sent_at", { ascending: true })
+  return runCachedQuery(
+    cacheKeys.messages(conversationId),
+    [cacheTags.messages(conversationId)],
+    async () => {
+      const supabase = createSupabaseAdminClient()
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversationId)
+        .order("sent_at", { ascending: true })
 
-  if (error) {
-    console.error("Error fetching messages:", error)
-    return []
-  }
+      if (error) {
+        console.error("Error fetching messages:", error)
+        return []
+      }
 
-  return data
+      return data
+    },
+  )
 }
 
 /**
@@ -93,7 +117,7 @@ export async function sendMessage(conversationId: string, senderId: string, cont
     .insert({
       conversation_id: conversationId,
       sender_id: senderId,
-      content: content
+      content,
     })
     .select()
     .single()
@@ -102,6 +126,13 @@ export async function sendMessage(conversationId: string, senderId: string, cont
     console.error("Error sending message:", error)
     throw error
   }
+
+  revalidateMessagesTag(conversationId)
+
+  const participantIds = await getConversationParticipantIds(conversationId)
+  participantIds.forEach((participantId) => {
+    revalidateConversationsTag(participantId)
+  })
 
   return data
 }
@@ -122,100 +153,133 @@ export async function getChatPartner(matchId: string, currentUserId: string) {
 
   const partnerId = match.user1_id === currentUserId ? match.user2_id : match.user1_id
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("display_name, id")
-    .eq("id", partnerId)
-    .single()
+  return runCachedQuery(
+    [...cacheKeys.profile(partnerId), "chat-partner", matchId],
+    [cacheTags.profile(partnerId)],
+    async () => {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("display_name, id")
+        .eq("id", partnerId)
+        .single()
 
-  const { data: photo } = await supabase
-    .from("profile_photos")
-    .select("url, uploaded_at")
-    .eq("user_id", partnerId)
-    .order("order", { ascending: true })
-    .limit(1)
-    .maybeSingle()
+      const { data: photo } = await supabase
+        .from("profile_photos")
+        .select("url, uploaded_at")
+        .eq("user_id", partnerId)
+        .order("order", { ascending: true })
+        .limit(1)
+        .maybeSingle()
 
-  return {
-    id: partnerId,
-    name: profile?.display_name || "Musician",
-    avatar: photo?.url || "",
-    uploadedAt: photo?.uploaded_at || null
-  }
+      return {
+        id: partnerId,
+        name: profile?.display_name || "Musician",
+        avatar: photo?.url || "",
+        uploadedAt: photo?.uploaded_at || null,
+      }
+    },
+  )
 }
 
 /**
  * Fetches all conversations where the user is a participant.
  */
 export async function getUserConversations(currentUserId: string) {
-  const supabase = createSupabaseAdminClient()
+  return runCachedQuery(
+    cacheKeys.conversations(currentUserId),
+    [cacheTags.conversations(currentUserId)],
+    async () => {
+      const supabase = createSupabaseAdminClient()
 
-  // 1. Fetch conversations joined with matches and profiles
-  // We need to find matches where user is user1 or user2
+      // 1. Fetch conversations joined with matches and profiles
+      // We need to find matches where user is user1 or user2
+      const { data, error } = await supabase
+        .from("conversations")
+        .select(`
+          id,
+          match_id,
+          matches!inner (
+            id,
+            user1_id,
+            user2_id
+          )
+        `)
+        .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`, { foreignTable: "matches" })
+
+      if (error) {
+        console.error("Error fetching conversations:", error)
+        return []
+      }
+
+      // 2. Hydrate with latest messages and partner profile info
+      const hydratedConversations = await Promise.all(data.map(async (conv: any) => {
+        const partnerId = conv.matches.user1_id === currentUserId ? conv.matches.user2_id : conv.matches.user1_id
+
+        // Fetch latest message
+        const { data: latestMsg } = await supabase
+          .from("messages")
+          .select("content, sent_at, read_at, sender_id")
+          .eq("conversation_id", conv.id)
+          .order("sent_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        // Fetch partner profile & photo
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("display_name")
+          .eq("id", partnerId)
+          .single()
+
+        const { data: photo } = await supabase
+          .from("profile_photos")
+          .select("url, uploaded_at")
+          .eq("user_id", partnerId)
+          .order("order", { ascending: true })
+          .limit(1)
+          .maybeSingle()
+
+        return {
+          id: conv.id,
+          matchId: conv.match_id,
+          name: profile?.display_name || "Musician",
+          avatar: photo?.url || "",
+          uploadedAt: photo?.uploaded_at || null,
+          lastMessage: latestMsg?.content || "No messages yet",
+          timestamp: latestMsg?.sent_at ? new Date(latestMsg.sent_at).toLocaleDateString() : "N/A",
+          relativeTime: latestMsg?.sent_at ? formatRelativeTime(new Date(latestMsg.sent_at)) : "",
+          unread: latestMsg ? (!latestMsg.read_at && latestMsg.sender_id !== currentUserId) : false,
+          rawTimestamp: latestMsg?.sent_at || "0",
+        }
+      }))
+
+      // Sort by latest message date
+      return hydratedConversations.sort((a, b) =>
+        new Date(b.rawTimestamp).getTime() - new Date(a.rawTimestamp).getTime(),
+      )
+    },
+  )
+}
+
+async function getConversationParticipantIds(conversationId: string) {
+  const supabase = createSupabaseAdminClient()
   const { data, error } = await supabase
     .from("conversations")
-    .select(`
-      id,
-      match_id,
-      matches!inner (
-        id,
-        user1_id,
-        user2_id
-      )
-    `)
-    .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`, { foreignTable: "matches" })
+    .select("matches!inner(user1_id,user2_id)")
+    .eq("id", conversationId)
+    .maybeSingle()
 
-  if (error) {
-    console.error("Error fetching conversations:", error)
+  if (error || !data?.matches) {
     return []
   }
 
-  // 2. Hydrate with latest messages and partner profile info
-  const hydratedConversations = await Promise.all(data.map(async (conv: any) => {
-    const partnerId = conv.matches.user1_id === currentUserId ? conv.matches.user2_id : conv.matches.user1_id
+  const matchRow = Array.isArray(data.matches) ? data.matches[0] : data.matches
 
-    // Fetch latest message
-    const { data: latestMsg } = await supabase
-      .from("messages")
-      .select("content, sent_at, read_at, sender_id")
-      .eq("conversation_id", conv.id)
-      .order("sent_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+  if (!matchRow) {
+    return []
+  }
 
-    // Fetch partner profile & photo
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("id", partnerId)
-      .single()
-
-    const { data: photo } = await supabase
-      .from("profile_photos")
-      .select("url, uploaded_at")
-      .eq("user_id", partnerId)
-      .order("order", { ascending: true })
-      .limit(1)
-      .maybeSingle()
-
-    return {
-      id: conv.id,
-      matchId: conv.match_id,
-      name: profile?.display_name || "Musician",
-      avatar: photo?.url || "",
-      uploadedAt: photo?.uploaded_at || null,
-      lastMessage: latestMsg?.content || "No messages yet",
-      timestamp: latestMsg?.sent_at ? new Date(latestMsg.sent_at).toLocaleDateString() : 'N/A',
-      relativeTime: latestMsg?.sent_at ? formatRelativeTime(new Date(latestMsg.sent_at)) : '',
-      unread: latestMsg ? (!latestMsg.read_at && latestMsg.sender_id !== currentUserId) : false,
-      rawTimestamp: latestMsg?.sent_at || '0'
-    }
-  }))
-
-  // Sort by latest message date
-  return hydratedConversations.sort((a, b) => 
-    new Date(b.rawTimestamp).getTime() - new Date(a.rawTimestamp).getTime()
-  )
+  return [matchRow.user1_id, matchRow.user2_id].filter((value): value is string => Boolean(value))
 }
 
 function formatRelativeTime(date: Date) {

@@ -79,6 +79,7 @@ export async function saveSettingsAction(payload: SettingsFormData): Promise<Sav
     return syncGenres
   }
 
+  // Keep profile readers fresh without broad route-level invalidation.
   revalidateProfileTag(user.id)
   revalidatePath("/settings")
   revalidatePath("/me")

@@ -11,8 +11,20 @@ function normalizeCacheKeyPart(part: CacheKeyPart) {
 }
 
 export const cacheKeys = {
+  /**
+   * Key prefix for user profile reads.
+   * Final key shape: ["profile", userId]
+   */
   profile: (userId: string) => ["profile", normalizeCacheKeyPart(userId)],
+  /**
+   * Key prefix for a user's inbox conversation list.
+   * Final key shape: ["conversations", userId]
+   */
   conversations: (userId: string) => ["conversations", normalizeCacheKeyPart(userId)],
+  /**
+   * Key prefix for message history in a conversation.
+   * Final key shape: ["messages", conversationId]
+   */
   messages: (conversationId: string) => ["messages", normalizeCacheKeyPart(conversationId)],
 } as const
 
@@ -27,10 +39,15 @@ export function runCachedQuery<T>(
   tags: string[],
   query: () => Promise<T>,
 ): Promise<T> {
+  /**
+   * Keep this wrapper intentionally tiny so callers can opt into caching
+   * without repeating key normalization and options wiring.
+   */
   return unstable_cache(query, keyParts.map(normalizeCacheKeyPart), { tags })()
 }
 
 export function revalidateProfileTag(userId: string) {
+  // "max" follows Next's recommended profile for tag invalidation behavior.
   revalidateTag(cacheTags.profile(userId), "max")
 }
 

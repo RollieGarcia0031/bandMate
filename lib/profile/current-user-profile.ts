@@ -29,6 +29,10 @@ export type CurrentUserProfile = {
  * truth.
  */
 export async function getCurrentUserProfile(userId: string): Promise<CurrentUserProfile> {
+  /**
+   * Cache per user to avoid repeating the same profile joins on each request.
+   * Invalidation is handled by `revalidateProfileTag(userId)` in write actions.
+   */
   return runCachedQuery(
     cacheKeys.profile(userId),
     [cacheTags.profile(userId)],

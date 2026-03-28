@@ -75,6 +75,7 @@ export async function getOrCreateConversation(matchId: string) {
     .maybeSingle()
 
   if (match) {
+    // Ensure both participants immediately see the newly created conversation.
     revalidateConversationsTag(match.user1_id)
     revalidateConversationsTag(match.user2_id)
   }
@@ -86,6 +87,7 @@ export async function getOrCreateConversation(matchId: string) {
  * Fetches message history for a conversation.
  */
 export async function getConversationMessages(conversationId: string) {
+  // Cache by conversation id so message history isn't refetched on every render.
   return runCachedQuery(
     cacheKeys.messages(conversationId),
     [cacheTags.messages(conversationId)],
@@ -127,8 +129,10 @@ export async function sendMessage(conversationId: string, senderId: string, cont
     throw error
   }
 
+  // The new message invalidates this thread history.
   revalidateMessagesTag(conversationId)
 
+  // The inbox list preview (last message, unread badge, ordering) changes too.
   const participantIds = await getConversationParticipantIds(conversationId)
   participantIds.forEach((participantId) => {
     revalidateConversationsTag(participantId)
@@ -153,6 +157,7 @@ export async function getChatPartner(matchId: string, currentUserId: string) {
 
   const partnerId = match.user1_id === currentUserId ? match.user2_id : match.user1_id
 
+  // Partner identity/photo can be reused and invalidated via profile tag updates.
   return runCachedQuery(
     [...cacheKeys.profile(partnerId), "chat-partner", matchId],
     [cacheTags.profile(partnerId)],
@@ -185,6 +190,7 @@ export async function getChatPartner(matchId: string, currentUserId: string) {
  * Fetches all conversations where the user is a participant.
  */
 export async function getUserConversations(currentUserId: string) {
+  // Cache the hydrated inbox list for each user and invalidate by conversations tag.
   return runCachedQuery(
     cacheKeys.conversations(currentUserId),
     [cacheTags.conversations(currentUserId)],

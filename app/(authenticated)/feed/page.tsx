@@ -61,7 +61,7 @@ type FeedPost = {
  * The feed intentionally exposes creator identity, post details, and a playable
  * video URL while the ranking algorithm is still being defined.
  */
-async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
+async function mapFeedPostRow(row: FeedPostRow, supabaseClient?: any): Promise<FeedPost> {
   const videoDebugInfo = getPostVideoReferenceDebugInfo(row.video_url)
   const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles
   const fallbackUsername = profile?.username?.trim() || null
@@ -86,7 +86,7 @@ async function mapFeedPostRow(row: FeedPostRow): Promise<FeedPost> {
   try {
     return {
       ...basePost,
-      videoUrl: await resolvePostVideoUrl(row.video_url),
+      videoUrl: await resolvePostVideoUrl(row.video_url, supabaseClient),
       videoError: null,
     }
   } catch (error) {
@@ -950,7 +950,7 @@ export default function FeedPage() {
         throw error
       }
 
-      const mappedPosts = await Promise.all((data ?? []).map((row) => mapFeedPostRow(row as FeedPostRow)))
+      const mappedPosts = await Promise.all((data ?? []).map((row) => mapFeedPostRow(row as FeedPostRow, supabase)))
       setPosts(mappedPosts)
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "We could not load the feed right now.")

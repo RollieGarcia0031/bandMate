@@ -30,6 +30,15 @@ export type PostVideoReferenceDebugInfo = {
 }
 
 const USER_POSTS_BUCKET = supabase_config.storageBuckets.userPosts
+const SIGNED_URL_TTL_SECONDS = 60 * 60
+const SIGNED_URL_REFRESH_BUFFER_MS = 2 * 60 * 1000
+
+type SignedUrlCacheEntry = {
+  signedUrl: string
+  expiresAt: number
+}
+
+const signedPostVideoUrlCache = new Map<string, SignedUrlCacheEntry>()
 
 /**
  * Inspect a persisted post video reference and describe how the app will treat
@@ -116,10 +125,17 @@ export async function resolvePostVideoUrl(videoReference: string, client?: any) 
     return videoReference
   }
 
+  const normalizedStoragePath = debugInfo.normalizedStoragePath
+  const cachedSignedUrl = signedPostVideoUrlCache.get(normalizedStoragePath)
+
+  if (cachedSignedUrl && cachedSignedUrl.expiresAt - Date.now() > SIGNED_URL_REFRESH_BUFFER_MS) {
+    return cachedSignedUrl.signedUrl
+  }
+
   const supabase = client || createSupabaseBrowserClient()
   const { data, error } = await supabase.storage
     .from(USER_POSTS_BUCKET)
-    .createSignedUrl(debugInfo.normalizedStoragePath, 60 * 60)
+    .createSignedUrl(normalizedStoragePath, SIGNED_URL_TTL_SECONDS)
 
   if (error) {
     throw new Error(
@@ -128,11 +144,16 @@ export async function resolvePostVideoUrl(videoReference: string, client?: any) 
         `bucket=${debugInfo.bucketName}`,
         `referenceKind=${debugInfo.referenceKind}`,
         `originalReference=${JSON.stringify(debugInfo.originalReference)}`,
-        `normalizedStoragePath=${JSON.stringify(debugInfo.normalizedStoragePath)}`,
+        `normalizedStoragePath=${JSON.stringify(normalizedStoragePath)}`,
         `supabaseError=${error.message}`,
       ].join(" "),
     )
   }
+
+  signedPostVideoUrlCache.set(normalizedStoragePath, {
+    signedUrl: data.signedUrl,
+    expiresAt: Date.now() + SIGNED_URL_TTL_SECONDS * 1000,
+  })
 
   return data.signedUrl
 }

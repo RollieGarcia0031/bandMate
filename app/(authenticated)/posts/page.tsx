@@ -39,13 +39,13 @@ function formatPostCreatedAt(createdAt: string | null) {
  * Convert a database row into the UI model used by the page after resolving a
  * playable video URL from Supabase Storage when needed.
  */
-async function mapPostRowToPost(row: PostRow): Promise<Post> {
+async function mapPostRowToPost(row: PostRow, supabaseClient?: any): Promise<Post> {
   return {
     id: row.id,
     title: row.title?.trim() || "Untitled post",
     description: row.description?.trim() || "",
     visibility: row.visibility ?? "public",
-    videoUrl: await resolvePostVideoUrl(row.video_url),
+    videoUrl: await resolvePostVideoUrl(row.video_url, supabaseClient),
     createdAt: formatPostCreatedAt(row.created_at),
     likes: row.likes_count ?? 0,
     comments: row.comments_count ?? 0,
@@ -124,7 +124,7 @@ export default function PostsPage() {
         throw error
       }
 
-      const mappedPosts = await Promise.all((data ?? []).map((row) => mapPostRowToPost(row as PostRow)))
+      const mappedPosts = await Promise.all((data ?? []).map((row) => mapPostRowToPost(row as PostRow, supabase)))
       setPosts(mappedPosts)
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "We could not load your posts.")
@@ -180,7 +180,7 @@ export default function PostsPage() {
         (data ?? [])
           .map((row: any) => row.posts)
           .filter(Boolean)
-          .map((postRow: any) => mapPostRowToPost(postRow as PostRow))
+          .map((postRow: any) => mapPostRowToPost(postRow as PostRow, supabase))
       )
       
       setLikedPosts(mappedPosts)
@@ -238,7 +238,7 @@ export default function PostsPage() {
         (data ?? [])
           .map((row: any) => row.posts)
           .filter(Boolean)
-          .map((postRow: any) => mapPostRowToPost(postRow as PostRow))
+          .map((postRow: any) => mapPostRowToPost(postRow as PostRow, supabase))
       )
       
       setDislikedPosts(mappedPosts)
@@ -359,7 +359,7 @@ export default function PostsPage() {
         throw insertError
       }
 
-      const mappedPost = await mapPostRowToPost(insertedPost as PostRow)
+      const mappedPost = await mapPostRowToPost(insertedPost as PostRow, supabase)
       setPosts((currentPosts) => [mappedPost, ...currentPosts])
       resetForm()
       setFormFeedback({ tone: "success", message: "Your video post was uploaded successfully." })

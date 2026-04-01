@@ -4,11 +4,12 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { Loader2, Music, MapPin, Search, Sliders, Users, UserRound, ChevronDown, ChevronUp } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { supabase_config } from "@/lib/supabase/config"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 const genres = ["Rock", "Pop", "Jazz", "Electronic", "Hip Hop", "R&B", "Country", "Classical", "Metal", "Folk", "Indie", "Blues"]
 const instruments = ["Guitar", "Bass", "Drums", "Piano", "Vocals", "Violin", "Saxophone", "Trumpet", "DJ", "Production"]
@@ -30,7 +31,43 @@ type SearchResult = {
   avatar: string
 }
 
+
+type CacheEntry = {
+  results: SearchResult[]
+  timestamp: number
+}
+
+const CACHE_TTL_MS = 90_000
+const SESSION_CACHE_KEY = "search-page-cache-v1"
+const SESSION_CACHE_LIMIT = 10
+
+const normalizeQuery = (query: string) => query.trim().toLowerCase()
+
+const normalizeFilterValues = (values: string[]) =>
+  values.map((value) => value.toLowerCase()).sort()
+
+const buildCacheKey = (query: string, genres: string[], instrumentValues: string[]) =>
+  JSON.stringify({
+    query: normalizeQuery(query),
+    appliedGenres: normalizeFilterValues(genres),
+    appliedInstruments: normalizeFilterValues(instrumentValues),
+  })
+
+const parseCsvParam = (value: string | null) =>
+  value
+    ? value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : []
+
 export default function SearchPage() {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
+  const initializedFromUrlRef = useRef(false)
+  const latestSearchIdRef = useRef(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [pendingGenres, setPendingGenres] = useState<string[]>([])
   const [pendingInstruments, setPendingInstruments] = useState<string[]>([])
@@ -40,6 +77,120 @@ export default function SearchPage() {
   const [isSearching, setIsSearching] = useState(false)
   const [isFiltersOpen, setIsFiltersOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const currentSearchKey = useMemo(
+    () => buildCacheKey(searchQuery, appliedGenres, appliedInstruments),
+    [searchQuery, appliedGenres, appliedInstruments]
+  )
+
+  const persistCacheToSessionStorage = useCallback(() => {
+    try {
+      const entries = Array.from(cacheRef.current.entries()).slice(-SESSION_CACHE_LIMIT)
+      sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(entries))
+    } catch {
+      // Ignore storage failures and continue with in-memory cache.
+    }
+  }, [])
+
+  const updateCache = useCallback((cacheKey: string, nextResults: SearchResult[]) => {
+    cacheRef.current.set(cacheKey, {
+      results: nextResults,
+      timestamp: Date.now(),
+    })
+
+    if (cacheRef.current.size > SESSION_CACHE_LIMIT) {
+      const oldestKey = cacheRef.current.keys().next().value
+      if (oldestKey) {
+        cacheRef.current.delete(oldestKey)
+      }
+    }
+
+    persistCacheToSessionStorage()
+  }, [persistCacheToSessionStorage])
+
+  const fetchSearchResults = useCallback(async (
+    queryText: string,
+    genreFilters: string[],
+    instrumentFilters: string[]
+  ) => {
+    const supabase = createSupabaseBrowserClient()
+
+    let query = supabase
+      .from("profiles")
+      .select(`
+        id,
+        username,
+        display_name,
+        bio,
+        city,
+        user_instruments (
+          instruments (name)
+        ),
+        user_genres (
+          genres (name)
+        ),
+        profile_photos (
+          url,
+          uploaded_at
+        )
+      `)
+
+    if (queryText.trim()) {
+      const textQuery = `%${queryText.trim()}%`
+      query = query.or(`username.ilike.${textQuery},display_name.ilike.${textQuery}`)
+    }
+
+    const { data, error: searchError } = await query.limit(50)
+
+    if (searchError) {
+      throw searchError
+    }
+
+    let mappedResults: SearchResult[] = (data ?? []).map((row: any) => {
+      const instruments = (row.user_instruments ?? [])
+        .map((ui: any) => ui.instruments?.name)
+        .filter(Boolean)
+
+      const genres = (row.user_genres ?? [])
+        .map((ug: any) => ug.genres?.name)
+        .filter(Boolean)
+
+      const photo = row.profile_photos?.[0]
+      let avatar = ""
+      if (photo?.url) {
+        const publicUrl = supabase.storage
+          .from(supabase_config.storageBuckets.profilePhotos)
+          .getPublicUrl(photo.url).data.publicUrl
+
+        avatar = photo.uploaded_at ? `${publicUrl}?v=${encodeURIComponent(photo.uploaded_at)}` : publicUrl
+      }
+
+      return {
+        id: row.id,
+        username: row.username,
+        displayName: row.display_name,
+        bio: row.bio || "",
+        city: row.city || "",
+        instruments,
+        genres,
+        avatar,
+      }
+    })
+
+    if (genreFilters.length > 0) {
+      mappedResults = mappedResults.filter((profile) =>
+        genreFilters.some((genre) => profile.genres.includes(genre))
+      )
+    }
+
+    if (instrumentFilters.length > 0) {
+      mappedResults = mappedResults.filter((profile) =>
+        instrumentFilters.some((inst) => profile.instruments.includes(inst))
+      )
+    }
+
+    return mappedResults
+  }, [])
 
   const toggleGenre = (genre: string) => {
     setPendingGenres((prev) =>
@@ -65,110 +216,120 @@ export default function SearchPage() {
     setPendingInstruments([])
   }
 
-  const performSearch = async () => {
-    setIsSearching(true)
+  const performSearch = useCallback(async (
+    cacheKey: string,
+    queryText: string,
+    genreFilters: string[],
+    instrumentFilters: string[],
+    options?: { background?: boolean }
+  ) => {
+    const searchId = ++latestSearchIdRef.current
+    const background = options?.background ?? false
+
+    if (!background) {
+      setIsSearching(true)
+    }
     setError(null)
 
     try {
-      const supabase = createSupabaseBrowserClient()
+      const mappedResults = await fetchSearchResults(queryText, genreFilters, instrumentFilters)
 
-      // We start by building a query for profiles. 
-      // We join user_instruments and user_genres to allow filtering and displaying those tags.
-      let query = supabase
-        .from("profiles")
-        .select(`
-          id,
-          username,
-          display_name,
-          bio,
-          city,
-          user_instruments (
-            instruments (name)
-          ),
-          user_genres (
-            genres (name)
-          ),
-          profile_photos (
-            url,
-            uploaded_at
-          )
-        `)
-
-      // If there's a search query, we filter by username or display_name.
-      if (searchQuery.trim()) {
-        const textQuery = `%${searchQuery.trim()}%`
-        query = query.or(`username.ilike.${textQuery},display_name.ilike.${textQuery}`)
-      }
-
-      const { data, error: searchError } = await query.limit(50)
-
-      if (searchError) {
-        throw searchError
-      }
-
-      // We process the nested relational data into a flat array of SearchResult objects.
-      let mappedResults: SearchResult[] = (data ?? []).map((row: any) => {
-        const instruments = (row.user_instruments ?? [])
-          .map((ui: any) => ui.instruments?.name)
-          .filter(Boolean)
-        
-        const genres = (row.user_genres ?? [])
-          .map((ug: any) => ug.genres?.name)
-          .filter(Boolean)
-
-        const photo = row.profile_photos?.[0]
-        let avatar = ""
-        if (photo?.url) {
-          const publicUrl = supabase.storage
-            .from(supabase_config.storageBuckets.profilePhotos)
-            .getPublicUrl(photo.url).data.publicUrl
-          
-          avatar = photo.uploaded_at ? `${publicUrl}?v=${encodeURIComponent(photo.uploaded_at)}` : publicUrl
-        }
-
-        return {
-          id: row.id,
-          username: row.username,
-          displayName: row.display_name,
-          bio: row.bio || "",
-          city: row.city || "",
-          instruments,
-          genres,
-          avatar
-        }
-      })
-
-      // If explicit filters are selected, we perform client-side filtering for better control 
-      // over "one of" vs "all of" logic during this initial implementation phase.
-      if (appliedGenres.length > 0) {
-        mappedResults = mappedResults.filter(profile => 
-          appliedGenres.some(genre => profile.genres.includes(genre))
-        )
-      }
-
-      if (appliedInstruments.length > 0) {
-        mappedResults = mappedResults.filter(profile => 
-          appliedInstruments.some(inst => profile.instruments.includes(inst))
-        )
+      if (searchId !== latestSearchIdRef.current) {
+        return
       }
 
       setResults(mappedResults)
+      updateCache(cacheKey, mappedResults)
     } catch (err) {
+      if (searchId !== latestSearchIdRef.current) {
+        return
+      }
+
       setError(err instanceof Error ? err.message : "Search failed. Please try again.")
     } finally {
-      setIsSearching(false)
+      if (!background && searchId === latestSearchIdRef.current) {
+        setIsSearching(false)
+      }
     }
-  }
+  }, [fetchSearchResults, updateCache])
+
+  useEffect(() => {
+    if (initializedFromUrlRef.current) {
+      return
+    }
+
+    const queryFromUrl = searchParams.get("q") ?? ""
+    const genresFromUrl = parseCsvParam(searchParams.get("genres"))
+    const instrumentsFromUrl = parseCsvParam(searchParams.get("instruments"))
+
+    setSearchQuery(queryFromUrl)
+    setAppliedGenres(genresFromUrl)
+    setAppliedInstruments(instrumentsFromUrl)
+    setPendingGenres(genresFromUrl)
+    setPendingInstruments(instrumentsFromUrl)
+
+    try {
+      const rawCache = sessionStorage.getItem(SESSION_CACHE_KEY)
+      if (rawCache) {
+        const parsed = JSON.parse(rawCache) as [string, CacheEntry][]
+        cacheRef.current = new Map(parsed)
+      }
+    } catch {
+      cacheRef.current = new Map()
+    }
+
+    initializedFromUrlRef.current = true
+  }, [searchParams])
+
+  useEffect(() => {
+    if (!initializedFromUrlRef.current) {
+      return
+    }
+
+    const nextParams = new URLSearchParams()
+
+    if (searchQuery.trim()) {
+      nextParams.set("q", searchQuery.trim())
+    }
+    if (appliedGenres.length > 0) {
+      nextParams.set("genres", appliedGenres.join(","))
+    }
+    if (appliedInstruments.length > 0) {
+      nextParams.set("instruments", appliedInstruments.join(","))
+    }
+
+    const queryString = nextParams.toString()
+    router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false })
+  }, [appliedGenres, appliedInstruments, pathname, router, searchQuery])
 
   // Automatically trigger a search when the query or *applied* filters change.
   // This ensures text remains reactive while tags only apply on click.
   useEffect(() => {
+    if (!initializedFromUrlRef.current) {
+      return
+    }
+
+    const cached = cacheRef.current.get(currentSearchKey)
+    const isFresh = cached ? Date.now() - cached.timestamp < CACHE_TTL_MS : false
+
+    if (cached) {
+      setResults(cached.results)
+      setError(null)
+      setIsSearching(false)
+
+      if (!isFresh) {
+        void performSearch(currentSearchKey, searchQuery, appliedGenres, appliedInstruments, { background: true })
+      }
+
+      return
+    }
+
     const timeout = setTimeout(() => {
-      void performSearch()
+      void performSearch(currentSearchKey, searchQuery, appliedGenres, appliedInstruments)
     }, 400)
 
     return () => clearTimeout(timeout)
-  }, [searchQuery, appliedGenres, appliedInstruments])
+  }, [appliedGenres, appliedInstruments, currentSearchKey, performSearch, searchQuery])
 
   return (
     <div className="min-h-screen p-4 lg:p-8">

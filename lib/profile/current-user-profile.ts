@@ -1,6 +1,6 @@
 import { cacheKeys, cacheTags, runCachedQuery } from "@/lib/cache"
 import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
-import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 
 export type CurrentUserProfile = {
   id: string
@@ -23,12 +23,65 @@ export type CurrentUserProfile = {
   joinedDate: string | null
 }
 
+type AuthUserContext = {
+  id: string
+  email?: string | null
+  created_at?: string | null
+  user_metadata?: {
+    full_name?: string | null
+  } | null
+}
+
+type CachedProfilePayload = {
+  username: string
+  displayName: string
+  bio: string
+  birthday: string
+  age: number | null
+  city: string
+  gender: string
+  youtubeUrl: string
+  spotifyUrl: string
+  lookingFor: string[]
+  experienceYears: number
+  experienceLevel: string
+  instruments: string[]
+  genres: string[]
+  avatar: string
+  profileCreatedAt: string | null
+}
+
 /**
  * Loads the authenticated user's profile and the related joins used by both the
  * settings and profile surfaces so they render from the same Supabase source of
  * truth.
  */
-export async function getCurrentUserProfile(userId: string): Promise<CurrentUserProfile> {
+export async function getCurrentUserProfile(authUser: AuthUserContext): Promise<CurrentUserProfile> {
+  const cachedProfile = await getCachedProfileData(authUser.id)
+
+  return {
+    id: authUser.id,
+    email: authUser.email ?? "",
+    username: cachedProfile.username,
+    displayName: cachedProfile.displayName || authUser.user_metadata?.full_name || authUser.email?.split("@")[0] || "BandMate member",
+    bio: cachedProfile.bio,
+    birthday: cachedProfile.birthday,
+    age: cachedProfile.age,
+    city: cachedProfile.city,
+    gender: cachedProfile.gender,
+    youtubeUrl: cachedProfile.youtubeUrl,
+    spotifyUrl: cachedProfile.spotifyUrl,
+    lookingFor: cachedProfile.lookingFor,
+    experienceYears: cachedProfile.experienceYears,
+    experienceLevel: cachedProfile.experienceLevel,
+    instruments: cachedProfile.instruments,
+    genres: cachedProfile.genres,
+    avatar: cachedProfile.avatar,
+    joinedDate: authUser.created_at ?? cachedProfile.profileCreatedAt,
+  }
+}
+
+async function getCachedProfileData(userId: string): Promise<CachedProfilePayload> {
   /**
    * Cache per user to avoid repeating the same profile joins on each request.
    * Invalidation is handled by `revalidateProfileTag(userId)` in write actions.
@@ -37,7 +90,7 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
     cacheKeys.profile(userId),
     [cacheTags.profile(userId)],
     async () => {
-      const supabase = await createSupabaseServerClient()
+      const supabase = createSupabaseAdminClient()
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -45,7 +98,7 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
         .eq("id", userId)
         .maybeSingle()
 
-      const [{ data: instrumentRows }, { data: genreRows }, { data: photoRows }, authUser] = await Promise.all([
+      const [{ data: instrumentRows }, { data: genreRows }, { data: photoRows }] = await Promise.all([
         supabase
           .from("user_instruments")
           .select("instruments(name)")
@@ -60,16 +113,13 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
           .eq("user_id", userId)
           .order("order", { ascending: true })
           .limit(1),
-        supabase.auth.getUser().then((result) => result.data.user ?? null),
       ])
 
       const birthday = profile?.birthday ?? ""
 
       return {
-        id: userId,
-        email: authUser?.email ?? "",
         username: profile?.username ?? "",
-        displayName: profile?.display_name ?? authUser?.user_metadata?.full_name ?? authUser?.email?.split("@")[0] ?? "BandMate member",
+        displayName: profile?.display_name ?? "",
         bio: profile?.bio ?? "",
         birthday,
         age: calculateAge(birthday),
@@ -83,7 +133,7 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
         instruments: (instrumentRows ?? []).flatMap((row) => normalizeJoinedName(row.instruments)).filter(Boolean),
         genres: (genreRows ?? []).flatMap((row) => normalizeJoinedName(row.genres)).filter(Boolean),
         avatar: photoRows?.[0]?.url ? resolveProfilePhotoUrl(supabase, photoRows[0].url, photoRows[0].uploaded_at) : "",
-        joinedDate: authUser?.created_at ?? profile?.created_at ?? null,
+        profileCreatedAt: profile?.created_at ?? null,
       }
     },
   )

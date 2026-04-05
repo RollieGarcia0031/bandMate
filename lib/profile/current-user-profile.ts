@@ -1,5 +1,5 @@
 import { cacheKeys, cacheTags, runCachedQuery } from "@/lib/cache"
-import { supabase_config } from "@/lib/supabase/config"
+import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 
 export type CurrentUserProfile = {
@@ -82,7 +82,7 @@ export async function getCurrentUserProfile(userId: string): Promise<CurrentUser
         experienceLevel: profile?.experience_level ?? "Intermediate",
         instruments: (instrumentRows ?? []).flatMap((row) => normalizeJoinedName(row.instruments)).filter(Boolean),
         genres: (genreRows ?? []).flatMap((row) => normalizeJoinedName(row.genres)).filter(Boolean),
-        avatar: resolveProfilePhotoUrl(supabase, photoRows?.[0]?.url, photoRows?.[0]?.uploaded_at),
+        avatar: photoRows?.[0]?.url ? resolveProfilePhotoUrl(supabase, photoRows[0].url, photoRows[0].uploaded_at) : "",
         joinedDate: authUser?.created_at ?? profile?.created_at ?? null,
       }
     },
@@ -99,32 +99,6 @@ function normalizeJoinedName(value: unknown): string[] {
   }
 
   return []
-}
-
-function resolveProfilePhotoUrl(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  photoUrl: string | undefined,
-  uploadedAt: string | null | undefined,
-) {
-  if (!photoUrl) {
-    return ""
-  }
-
-  const cacheBuster = uploadedAt ? `v=${encodeURIComponent(uploadedAt)}` : ""
-
-  if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-    if (!cacheBuster) {
-      return photoUrl
-    }
-
-    return `${photoUrl}${photoUrl.includes("?") ? "&" : "?"}${cacheBuster}`
-  }
-
-  const publicUrl = supabase.storage
-    .from(supabase_config.storageBuckets.profilePhotos)
-    .getPublicUrl(photoUrl).data.publicUrl
-
-  return cacheBuster ? `${publicUrl}?${cacheBuster}` : publicUrl
 }
 
 function calculateAge(birthday: string) {

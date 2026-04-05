@@ -6,7 +6,7 @@ import { Send, Phone, Video, MoreVertical, ArrowLeft, Loader2 } from "lucide-rea
 import Link from "next/link"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { getOrCreateConversation, getConversationMessages, sendMessage, getChatPartner } from "../actions"
-import { supabase_config } from "@/lib/supabase/config"
+import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
 
 // Message interfaces
 interface Message {
@@ -116,20 +116,9 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
       const partner = await getChatPartner(id, user.id)
       if (partner) {
         let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
-        const cacheBuster = partner.uploadedAt ? `v=${encodeURIComponent(partner.uploadedAt)}` : ""
 
         if (partner.avatar) {
-          if (partner.avatar.startsWith("http")) {
-            avatarUrl = partner.avatar
-            if (cacheBuster) {
-              avatarUrl = `${avatarUrl}${avatarUrl.includes("?") ? "&" : "?"}${cacheBuster}`
-            }
-          } else {
-            const publicUrl = supabase.storage
-              .from(supabase_config.storageBuckets.profilePhotos)
-              .getPublicUrl(partner.avatar).data.publicUrl
-            avatarUrl = cacheBuster ? `${publicUrl}?${cacheBuster}` : publicUrl
-          }
+          avatarUrl = resolveProfilePhotoUrl(supabase, partner.avatar, partner.uploadedAt)
         }
         setChatPartner({
           ...partner,

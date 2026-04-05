@@ -12,30 +12,42 @@ export async function GET(
   }
 
   const upstreamUrl = buildSupabasePublicStorageUrl(bucket, objectPath, request.url)
-  const upstreamResponse = await fetch(upstreamUrl)
 
-  if (!upstreamResponse.ok) {
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    })
+
+    if (!upstreamResponse.ok) {
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        headers: {
+          "cache-control": "no-store",
+        },
+      })
+    }
+
+    const responseHeaders = new Headers()
+    copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "content-type")
+    copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "content-length")
+    copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "etag")
+    copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "last-modified")
+    copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "accept-ranges")
+
+    responseHeaders.set(
+      "cache-control",
+      getSupabaseObjectCacheControlPolicy(new URL(request.url)),
+    )
+
     return new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
-      headers: {
-        "cache-control": "no-store",
-      },
+      headers: responseHeaders,
     })
+  } catch (error) {
+    console.error("Storage fetch error:", error)
+    const status = error instanceof Error && error.name === "TimeoutError" ? 504 : 502
+    return new Response("Error fetching storage object.", { status })
   }
-
-  const responseHeaders = new Headers()
-  copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "content-type")
-  copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "content-length")
-  copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "etag")
-  copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "last-modified")
-  copyHeaderIfPresent(upstreamResponse.headers, responseHeaders, "accept-ranges")
-
-  responseHeaders.set("cache-control", getSupabaseObjectCacheControlPolicy(new URL(request.url)))
-
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
-    headers: responseHeaders,
-  })
 }
 
 function buildSupabasePublicStorageUrl(bucket: string, objectPath: string[], requestUrl: string) {

@@ -13,7 +13,7 @@ export default async function SettingsPage() {
     return null
   }
 
-  const initialData = toSettingsFormData(await getCurrentUserProfile(user.id))
+  const initialData = toSettingsFormData(await getCurrentUserProfile(user))
 
   return <SettingsForm initialData={initialData} userId={user.id} />
 }

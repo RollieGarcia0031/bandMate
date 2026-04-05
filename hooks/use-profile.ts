@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
-import { supabase_config } from "@/lib/supabase/config"
+import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
 
 export type ProfileData = {
   id: string
@@ -40,20 +40,7 @@ export function useProfile() {
 
       let avatarUrl = ""
       if (photoRows?.[0]?.url) {
-        const photoUrl = photoRows[0].url
-        if (photoUrl.startsWith("http")) {
-          avatarUrl = photoUrl
-        } else {
-          const { data } = supabase.storage
-            .from(supabase_config.storageBuckets.profilePhotos)
-            .getPublicUrl(photoUrl)
-          avatarUrl = data.publicUrl
-        }
-        
-        if (photoRows[0].uploaded_at) {
-          const cacheBuster = `v=${encodeURIComponent(photoRows[0].uploaded_at)}`
-          avatarUrl = `${avatarUrl}${avatarUrl.includes("?") ? "&" : "?"}${cacheBuster}`
-        }
+        avatarUrl = resolveProfilePhotoUrl(supabase, photoRows[0].url, photoRows[0].uploaded_at)
       }
 
       setProfile({

@@ -17,7 +17,7 @@ export default async function MePage() {
     return null
   }
 
-  const profile = await getCurrentUserProfile(user.id)
+  const profile = await getCurrentUserProfile(user)
   const heroSubtitle = buildHeroSubtitle(profile)
   const joinedLabel = profile.joinedDate ? format(new Date(profile.joinedDate), "MMMM yyyy") : null
   const profileCompletion = calculateProfileCompletion(profile)

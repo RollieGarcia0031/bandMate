@@ -5,7 +5,7 @@ import { MessageCircle, Music2, Heart, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
-import { supabase_config } from "@/lib/supabase/config"
+import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
 import { getTheyLikedYouCounts, getUserConversations } from "./actions"
 import {
   Select,
@@ -152,13 +152,7 @@ export default function InboxPage() {
 
         let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
         if (pPhoto?.url) {
-          if (pPhoto.url.startsWith("http")) {
-            avatarUrl = pPhoto.url
-          } else {
-            avatarUrl = supabase.storage
-              .from(supabase_config.storageBuckets.profilePhotos)
-              .getPublicUrl(pPhoto.url).data.publicUrl
-          }
+          avatarUrl = resolveProfilePhotoUrl(supabase, pPhoto.url)
         }
 
         return {
@@ -192,20 +186,9 @@ export default function InboxPage() {
       // Resolve avatar URLs
       const mapped: ConversationItem[] = (data || []).map((conv: any) => {
         let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
-        const cacheBuster = conv.uploadedAt ? `v=${encodeURIComponent(conv.uploadedAt)}` : ""
 
         if (conv.avatar) {
-          if (conv.avatar.startsWith("http")) {
-            avatarUrl = conv.avatar
-            if (cacheBuster) {
-              avatarUrl = `${avatarUrl}${avatarUrl.includes("?") ? "&" : "?"}${cacheBuster}`
-            }
-          } else {
-            const publicUrl = supabase.storage
-              .from(supabase_config.storageBuckets.profilePhotos)
-              .getPublicUrl(conv.avatar).data.publicUrl
-            avatarUrl = cacheBuster ? `${publicUrl}?${cacheBuster}` : publicUrl
-          }
+          avatarUrl = resolveProfilePhotoUrl(supabase, conv.avatar, conv.uploadedAt)
         }
         return {
           ...conv,

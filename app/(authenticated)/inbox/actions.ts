@@ -4,6 +4,7 @@ import {
   cacheKeys,
   cacheTags,
   revalidateConversationsTag,
+  revalidateMatchesTag,
   revalidateMessagesTag,
   runCachedQuery,
 } from "@/lib/cache"
@@ -60,6 +61,116 @@ export async function getMatchesTotalCount(currentUserId: string) {
   }
 
   return count ?? 0
+}
+
+type MatchSortOption = "theyLikedYou" | "youLikedThem"
+
+export async function getPaginatedMatches(
+  currentUserId: string,
+  page = 1,
+  sort: MatchSortOption = "theyLikedYou",
+  pageSize = 25,
+) {
+  const safePage = Math.max(1, Math.floor(page))
+  const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize)))
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+
+  return runCachedQuery(
+    cacheKeys.matches(currentUserId, safePage, sort),
+    [cacheTags.matches(currentUserId)],
+    async () => {
+      const supabase = createSupabaseAdminClient()
+
+      const { data: userMatches, error: matchesError } = await supabase
+        .from("matches")
+        .select("id, user1_id, user2_id")
+        .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
+        .order("created_at", { ascending: false })
+        .range(from, to)
+
+      if (matchesError) {
+        console.error("Error fetching paginated matches:", matchesError)
+        return []
+      }
+
+      if (!userMatches || userMatches.length === 0) {
+        return []
+      }
+
+      const matchedUserIds = userMatches.map((match) =>
+        match.user1_id === currentUserId ? match.user2_id : match.user1_id,
+      )
+
+      const matchMap = new Map(
+        userMatches.map((match) => {
+          const otherId = match.user1_id === currentUserId ? match.user2_id : match.user1_id
+          return [otherId, { matchId: match.id, isNew: false }]
+        }),
+      )
+
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select(`
+          id,
+          display_name,
+          profile_photos(url, order, uploaded_at)
+        `)
+        .in("id", matchedUserIds)
+
+      if (profilesError) {
+        console.error("Profiles fetch error:", profilesError)
+      }
+
+      const theyLikedYouData = await getTheyLikedYouCounts(matchedUserIds, currentUserId)
+      const theyLikedYouCounts = new Map<string, number>()
+      theyLikedYouData?.forEach((row: any) => {
+        theyLikedYouCounts.set(row.user_id, (theyLikedYouCounts.get(row.user_id) || 0) + 1)
+      })
+
+      const { data: youLikedThemData } = await supabase
+        .from("swipes")
+        .select(`
+          posts!inner ( user_id )
+        `)
+        .eq("user_id", currentUserId)
+        .eq("direction", "like")
+        .in("posts.user_id", matchedUserIds)
+
+      const youLikedThemCounts = new Map<string, number>()
+      youLikedThemData?.forEach((row: any) => {
+        const postOwnerId = row.posts.user_id
+        youLikedThemCounts.set(postOwnerId, (youLikedThemCounts.get(postOwnerId) || 0) + 1)
+      })
+
+      const assembledMatches = (profilesData || []).map((profile: any) => {
+        const userPhotos = [...(profile.profile_photos || [])]
+        userPhotos.sort((a: any, b: any) => (a.order || 0) - (b.order || 0))
+        const primaryPhoto = userPhotos[0]
+        const matchInfo = matchMap.get(profile.id)
+
+        return {
+          id: matchInfo?.matchId || profile.id,
+          name: profile.display_name || "Musician",
+          avatar: primaryPhoto?.url || "",
+          uploadedAt: primaryPhoto?.uploaded_at || null,
+          theyLikedYou: theyLikedYouCounts.get(profile.id) || 0,
+          youLikedThem: youLikedThemCounts.get(profile.id) || 0,
+          isNew: matchInfo?.isNew ?? false,
+        }
+      })
+
+      return assembledMatches.sort((a, b) => {
+        if (sort === "youLikedThem") {
+          if (b.youLikedThem !== a.youLikedThem) return b.youLikedThem - a.youLikedThem
+          return b.theyLikedYou - a.theyLikedYou
+        }
+
+        if (b.theyLikedYou !== a.theyLikedYou) return b.theyLikedYou - a.theyLikedYou
+        return b.youLikedThem - a.youLikedThem
+      })
+    },
+  )
 }
 
 /**
@@ -160,6 +271,11 @@ export async function sendMessage(conversationId: string, senderId: string, cont
   })
 
   return data
+}
+
+export async function revalidateMatchesForUsers(userIds: string[]) {
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))]
+  uniqueUserIds.forEach((userId) => revalidateMatchesTag(userId))
 }
 
 /**

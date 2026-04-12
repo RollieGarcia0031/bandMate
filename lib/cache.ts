@@ -26,12 +26,23 @@ export const cacheKeys = {
    * Final key shape: ["messages", conversationId]
    */
   messages: (conversationId: string) => ["messages", normalizeCacheKeyPart(conversationId)],
+  /**
+   * Key prefix for paginated match-list reads.
+   * Final key shape: ["matches", userId, page, sort]
+   */
+  matches: (userId: string, page: number, sort: string) => [
+    "matches",
+    normalizeCacheKeyPart(userId),
+    normalizeCacheKeyPart(page),
+    normalizeCacheKeyPart(sort),
+  ],
 } as const
 
 export const cacheTags = {
   profile: (userId: string) => `profile:${userId}`,
   conversations: (userId: string) => `conversations:${userId}`,
   messages: (conversationId: string) => `messages:${conversationId}`,
+  matches: (userId: string) => `matches:${userId}`,
 } as const
 
 export function runCachedQuery<T>(
@@ -57,4 +68,8 @@ export function revalidateConversationsTag(userId: string) {
 
 export function revalidateMessagesTag(conversationId: string) {
   revalidateTag(cacheTags.messages(conversationId), "max")
+}
+
+export function revalidateMatchesTag(userId: string) {
+  revalidateTag(cacheTags.matches(userId), "max")
 }

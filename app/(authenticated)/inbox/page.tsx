@@ -6,7 +6,7 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
-import { getMatchesTotalCount, getTheyLikedYouCounts, getUserConversations } from "./actions"
+import { getMatchesTotalCount, getPaginatedMatches, getUserConversations } from "./actions"
 import {
   Select,
   SelectContent,
@@ -32,6 +32,7 @@ type MatchItem = {
   id: string
   name: string
   avatar: string
+  uploadedAt: string | null
   theyLikedYou: number
   youLikedThem: number
   isNew: boolean
@@ -48,21 +49,14 @@ export default function InboxPage() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(true)
   const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
 
-  const sortedMatches = [...matches].sort((a, b) => {
-    if (matchSortBy === "theyLikedYou") {
-      if (b.theyLikedYou !== a.theyLikedYou) return b.theyLikedYou - a.theyLikedYou
-      return b.youLikedThem - a.youLikedThem
-    } else {
-      if (b.youLikedThem !== a.youLikedThem) return b.youLikedThem - a.youLikedThem
-      return b.theyLikedYou - a.theyLikedYou
-    }
-  })
-
   useEffect(() => {
-    void loadMatches()
     void loadMatchesTotalCount()
     void loadConversations()
   }, [])
+
+  useEffect(() => {
+    void loadMatches()
+  }, [matchSortBy])
 
   /**
    * Loads the user's matches from the database, fetches the profile details,
@@ -76,98 +70,15 @@ export default function InboxPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // 1. Fetch matches where the current user is either user1 or user2
-      const { data: userMatches, error: matchesError } = await supabase
-        .from("matches")
-        .select("*")
-        .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
-        .order("created_at", { ascending: false })
+      const serverMatches = await getPaginatedMatches(user.id, 1, matchSortBy)
+      const mappedMatches: MatchItem[] = (serverMatches || []).map((match: any) => ({
+        ...match,
+        avatar: match.avatar
+          ? resolveProfilePhotoUrl(supabase, match.avatar, match.uploadedAt)
+          : "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop",
+      }))
 
-      if (matchesError) throw matchesError
-
-      if (!userMatches || userMatches.length === 0) {
-        setMatches([])
-        return
-      }
-
-      // 2. Identify the "other" user IDs and map them to the match ID
-      const matchedUserIds = userMatches.map(m => m.user1_id === user.id ? m.user2_id : m.user1_id)
-      const matchMap = new Map()
-      userMatches.forEach(m => {
-        const otherId = m.user1_id === user.id ? m.user2_id : m.user1_id
-        // In a full app, we might check a last_viewed timestamp to set isNew
-        matchMap.set(otherId, { matchId: m.id, isNew: false })
-      })
-
-      // 3. Fetch the profiles and their primary photos for these matched users
-      const { data: profilesData, error: profilesError } = await supabase
-        .from("profiles")
-        .select(`
-          id, 
-          display_name,
-          profile_photos(url, order)
-        `)
-        .in("id", matchedUserIds)
-
-      if (profilesError) {
-        console.error("Profiles fetch error:", profilesError)
-      }
-
-      // 5. Calculate "theyLikedYou"
-      // They (matched users) are the swipers, you (logged-in user) are the post owner
-      // We use a Server Action to fetch this because the row level security
-      // restricts queries on `swipes` to the swiper. The admin service
-      // bypasses this so we can see who correctly liked the current user's posts.
-      const theyLikedYouData = await getTheyLikedYouCounts(matchedUserIds, user.id)
-
-      const theyLikedYouCounts = new Map<string, number>()
-      theyLikedYouData?.forEach((row: any) => {
-        theyLikedYouCounts.set(row.user_id, (theyLikedYouCounts.get(row.user_id) || 0) + 1)
-      })
-
-      // 6. Calculate "youLikedThem"
-      // You (logged-in user) are the swiper, they (matched users) are the post owners
-      const { data: youLikedThemData } = await supabase
-        .from("swipes")
-        .select(`
-          posts!inner ( user_id )
-        `)
-        .eq("user_id", user.id)
-        .eq("direction", "like")
-        .in("posts.user_id", matchedUserIds)
-
-      const youLikedThemCounts = new Map<string, number>()
-      youLikedThemData?.forEach((row: any) => {
-        const postOwnerId = row.posts.user_id
-        youLikedThemCounts.set(postOwnerId, (youLikedThemCounts.get(postOwnerId) || 0) + 1)
-      })
-
-      // 7. Assemble the final MatchItem array for the UI
-      const assembledMatches: MatchItem[] = (profilesData || []).map(profile => {
-        // Evaluate the embedded related profile_photos array
-        const userPhotos = profile.profile_photos || []
-        // Sort safely accounting for any potential type mismatches
-        userPhotos.sort((a: any, b: any) => (a.order || 0) - (b.order || 0))
-        const pPhoto = userPhotos[0]
-
-        const matchInfo = matchMap.get(profile.id)
-
-        let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
-        if (pPhoto?.url) {
-          avatarUrl = resolveProfilePhotoUrl(supabase, pPhoto.url)
-        }
-
-        return {
-          id: matchInfo.matchId,
-          name: profile.display_name,
-          avatar: avatarUrl,
-          theyLikedYou: theyLikedYouCounts.get(profile.id) || 0,
-          youLikedThem: youLikedThemCounts.get(profile.id) || 0,
-          isNew: matchInfo.isNew
-        }
-      })
-
-      setMatches(assembledMatches)
+      setMatches(mappedMatches)
 
     } catch (error) {
       console.error("Error loading matches:", error)
@@ -377,8 +288,8 @@ export default function InboxPage() {
               <div className="flex justify-center items-center py-20 px-4">
                 <Loader2 className="w-10 h-10 text-muted-foreground animate-spin" />
               </div>
-            ) : sortedMatches.length > 0 ? (
-              sortedMatches.map((match) => (
+            ) : matches.length > 0 ? (
+              matches.map((match) => (
               <Link
                 key={match.id}
                 href={`/inbox/${match.id}`}

@@ -27,6 +27,7 @@ import {
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { getPostVideoReferenceDebugInfo, type PostRow, resolvePostVideoUrl } from "@/lib/posts"
 import { cn } from "@/lib/utils"
+import { revalidateMatchesForUsers } from "../inbox/actions"
 
 type FeedPostProfile = {
   display_name: string | null
@@ -828,6 +829,10 @@ export default function FeedPage() {
 
         if (error) {
           throw error
+        }
+
+        if (targetPost?.ownerUserId) {
+          await revalidateMatchesForUsers([currentUserId, targetPost.ownerUserId])
         }
 
         setPosts((currentPosts) =>

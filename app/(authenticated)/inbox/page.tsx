@@ -45,7 +45,8 @@ export default function InboxPage() {
   const [matches, setMatches] = useState<MatchItem[]>([])
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [matchesTotalCount, setMatchesTotalCount] = useState(0)
-  const [isLoadingMatches, setIsLoadingMatches] = useState(true)
+  const [isLoadingMatches, setIsLoadingMatches] = useState(false)
+  const [hasLoadedMatches, setHasLoadedMatches] = useState(false)
   const [isLoadingConversations, setIsLoadingConversations] = useState(true)
   const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
 
@@ -55,14 +56,16 @@ export default function InboxPage() {
   }, [])
 
   useEffect(() => {
+    if (activeTab !== "matches" || hasLoadedMatches) return
+
     void loadMatches()
-  }, [matchSortBy])
+  }, [activeTab, hasLoadedMatches])
 
   /**
    * Loads the user's matches from the database, fetches the profile details,
    * and dynamically calculates bidirectional video like statistics.
    */
-  async function loadMatches() {
+  async function loadMatches(sortBy: "theyLikedYou" | "youLikedThem" = matchSortBy) {
     setIsLoadingMatches(true)
 
     try {
@@ -70,7 +73,7 @@ export default function InboxPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      const serverMatches = await getPaginatedMatches(user.id, 1, matchSortBy)
+      const serverMatches = await getPaginatedMatches(user.id, 1, sortBy)
       const mappedMatches: MatchItem[] = (serverMatches || []).map((match: any) => ({
         ...match,
         avatar: match.avatar
@@ -83,6 +86,7 @@ export default function InboxPage() {
     } catch (error) {
       console.error("Error loading matches:", error)
     } finally {
+      setHasLoadedMatches(true)
       setIsLoadingMatches(false)
     }
   }
@@ -271,7 +275,13 @@ export default function InboxPage() {
         <div className="flex flex-col">
           {matches.length > 0 && !isLoadingMatches && (
             <div className="flex justify-end p-4 border-b border-border">
-              <Select value={matchSortBy} onValueChange={(val: "theyLikedYou" | "youLikedThem") => setMatchSortBy(val)}>
+              <Select
+                value={matchSortBy}
+                onValueChange={(val: "theyLikedYou" | "youLikedThem") => {
+                  setMatchSortBy(val)
+                  void loadMatches(val)
+                }}
+              >
                 <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Sort by" />
                 </SelectTrigger>

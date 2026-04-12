@@ -6,7 +6,7 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
-import { getTheyLikedYouCounts, getUserConversations } from "./actions"
+import { getMatchesTotalCount, getTheyLikedYouCounts, getUserConversations } from "./actions"
 import {
   Select,
   SelectContent,
@@ -43,6 +43,7 @@ export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<TabType>("messages")
   const [matches, setMatches] = useState<MatchItem[]>([])
   const [conversations, setConversations] = useState<ConversationItem[]>([])
+  const [matchesTotalCount, setMatchesTotalCount] = useState(0)
   const [isLoadingMatches, setIsLoadingMatches] = useState(true)
   const [isLoadingConversations, setIsLoadingConversations] = useState(true)
   const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
@@ -59,6 +60,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     void loadMatches()
+    void loadMatchesTotalCount()
     void loadConversations()
   }, [])
 
@@ -174,6 +176,20 @@ export default function InboxPage() {
     }
   }
 
+  async function loadMatchesTotalCount() {
+    try {
+      const supabase = createSupabaseBrowserClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const totalCount = await getMatchesTotalCount(user.id)
+      setMatchesTotalCount(totalCount)
+    } catch (error) {
+      console.error("Error loading matches total count:", error)
+      setMatchesTotalCount(0)
+    }
+  }
+
   async function loadConversations() {
     setIsLoadingConversations(true)
     try {
@@ -234,7 +250,7 @@ export default function InboxPage() {
             )}
           >
             <Heart className="w-4 h-4" />
-            Matches ({matches.length})
+            Matches ({matchesTotalCount})
           </button>
         </div>
       </div>

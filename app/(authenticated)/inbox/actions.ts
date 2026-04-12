@@ -42,6 +42,27 @@ export async function getTheyLikedYouCounts(matchedUserIds: string[], currentUse
 }
 
 /**
+ * Fetches the total number of matches for a user.
+ * Uses count-only mode so the caller can display an accurate total
+ * independent from any paginated list query.
+ */
+export async function getMatchesTotalCount(currentUserId: string) {
+  const supabase = createSupabaseAdminClient()
+
+  const { count, error } = await supabase
+    .from("matches")
+    .select("id", { head: true, count: "exact" })
+    .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
+
+  if (error) {
+    console.error("Error fetching matches total count:", error)
+    return 0
+  }
+
+  return count ?? 0
+}
+
+/**
  * Gets or creates a conversation for a given match.
  */
 export async function getOrCreateConversation(matchId: string) {

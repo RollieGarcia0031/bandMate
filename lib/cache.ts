@@ -1,13 +1,13 @@
-import { revalidateTag, unstable_cache } from "next/cache"
+import { revalidateTag, unstable_cache } from "next/cache";
 
-type CacheKeyPart = string | number | boolean | null | undefined
+type CacheKeyPart = string | number | boolean | null | undefined;
 
 function normalizeCacheKeyPart(part: CacheKeyPart) {
   if (part === null || part === undefined) {
-    return ""
+    return "";
   }
 
-  return String(part)
+  return String(part);
 }
 
 export const cacheKeys = {
@@ -20,30 +20,37 @@ export const cacheKeys = {
    * Key prefix for a user's inbox conversation list.
    * Final key shape: ["conversations", userId]
    */
-  conversations: (userId: string) => ["conversations", normalizeCacheKeyPart(userId)],
+  conversations: (userId: string) => [
+    "conversations",
+    normalizeCacheKeyPart(userId),
+  ],
   /**
    * Key prefix for message history in a conversation.
    * Final key shape: ["messages", conversationId]
    */
-  messages: (conversationId: string) => ["messages", normalizeCacheKeyPart(conversationId)],
+  messages: (conversationId: string) => [
+    "messages",
+    normalizeCacheKeyPart(conversationId),
+  ],
   /**
    * Key prefix for paginated match-list reads.
-   * Final key shape: ["matches", userId, page, sort]
+   * Final key shape: ["matches", userId, page, pageSize, sort]
    */
-  matches: (userId: string, page: number, sort: string) => [
+  matches: (userId: string, page: number, pageSize: number, sort: string) => [
     "matches",
     normalizeCacheKeyPart(userId),
     normalizeCacheKeyPart(page),
+    normalizeCacheKeyPart(pageSize),
     normalizeCacheKeyPart(sort),
   ],
-} as const
+} as const;
 
 export const cacheTags = {
   profile: (userId: string) => `profile:${userId}`,
   conversations: (userId: string) => `conversations:${userId}`,
   messages: (conversationId: string) => `messages:${conversationId}`,
   matches: (userId: string) => `matches:${userId}`,
-} as const
+} as const;
 
 export function runCachedQuery<T>(
   keyParts: CacheKeyPart[],
@@ -54,22 +61,22 @@ export function runCachedQuery<T>(
    * Keep this wrapper intentionally tiny so callers can opt into caching
    * without repeating key normalization and options wiring.
    */
-  return unstable_cache(query, keyParts.map(normalizeCacheKeyPart), { tags })()
+  return unstable_cache(query, keyParts.map(normalizeCacheKeyPart), { tags })();
 }
 
 export function revalidateProfileTag(userId: string) {
   // "max" follows Next's recommended profile for tag invalidation behavior.
-  revalidateTag(cacheTags.profile(userId), "max")
+  revalidateTag(cacheTags.profile(userId), "max");
 }
 
 export function revalidateConversationsTag(userId: string) {
-  revalidateTag(cacheTags.conversations(userId), "max")
+  revalidateTag(cacheTags.conversations(userId), "max");
 }
 
 export function revalidateMessagesTag(conversationId: string) {
-  revalidateTag(cacheTags.messages(conversationId), "max")
+  revalidateTag(cacheTags.messages(conversationId), "max");
 }
 
 export function revalidateMatchesTag(userId: string) {
-  revalidateTag(cacheTags.matches(userId), "max")
+  revalidateTag(cacheTags.matches(userId), "max");
 }

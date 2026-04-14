@@ -1,137 +1,178 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { MessageCircle, Music2, Heart, Loader2 } from "lucide-react"
-import Link from "next/link"
-import { cn } from "@/lib/utils"
-import { createSupabaseBrowserClient } from "@/lib/supabase/client"
-import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control"
-import { getMatchesTotalCount, getPaginatedMatches, getUserConversations } from "./actions"
+import { useEffect, useState } from "react";
+import { MessageCircle, Music2, Heart, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { cn } from "@/lib/utils";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control";
+import {
+  getMatchesPage,
+  getMatchesTotalCount,
+  getUserConversations,
+} from "./actions";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/components/ui/select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type ConversationItem = {
-  id: string
-  matchId: string
-  name: string
-  lastMessage: string
-  timestamp: string
-  relativeTime: string
-  unread: boolean
-  avatar: string
-  uploadedAt: string | null
-}
+  id: string;
+  matchId: string;
+  name: string;
+  lastMessage: string;
+  timestamp: string;
+  relativeTime: string;
+  unread: boolean;
+  avatar: string;
+  uploadedAt: string | null;
+};
 
 // Matches will be fetched from Supabase
 type MatchItem = {
-  id: string
-  name: string
-  avatar: string
-  uploadedAt: string | null
-  theyLikedYou: number
-  youLikedThem: number
-  isNew: boolean
-}
+  id: string;
+  name: string;
+  avatar: string;
+  uploadedAt: string | null;
+  theyLikedYou: number;
+  youLikedThem: number;
+  isNew: boolean;
+};
 
-type TabType = "messages" | "matches"
+type TabType = "messages" | "matches";
+const MATCHES_PAGE_SIZE = 25;
 
 export default function InboxPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("messages")
-  const [matches, setMatches] = useState<MatchItem[]>([])
-  const [conversations, setConversations] = useState<ConversationItem[]>([])
-  const [matchesTotalCount, setMatchesTotalCount] = useState(0)
-  const [isLoadingMatches, setIsLoadingMatches] = useState(false)
-  const [hasLoadedMatches, setHasLoadedMatches] = useState(false)
-  const [isLoadingConversations, setIsLoadingConversations] = useState(true)
-  const [matchSortBy, setMatchSortBy] = useState<"theyLikedYou" | "youLikedThem">("theyLikedYou")
+  const [activeTab, setActiveTab] = useState<TabType>("messages");
+  const [matches, setMatches] = useState<MatchItem[]>([]);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [matchesTotalCount, setMatchesTotalCount] = useState(0);
+  const [isLoadingMatches, setIsLoadingMatches] = useState(false);
+  const [hasLoadedMatches, setHasLoadedMatches] = useState(false);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [matchSortBy, setMatchSortBy] = useState<
+    "theyLikedYou" | "youLikedThem"
+  >("theyLikedYou");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [matchesNextPage, setMatchesNextPage] = useState<number | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
-    void loadMatchesTotalCount()
-    void loadConversations()
-  }, [])
+    void loadMatchesTotalCount();
+    void loadConversations();
+  }, []);
 
   useEffect(() => {
-    if (activeTab !== "matches" || hasLoadedMatches) return
+    if (activeTab !== "matches" || hasLoadedMatches) return;
 
-    void loadMatches()
-  }, [activeTab, hasLoadedMatches])
+    void loadMatches(1, matchSortBy);
+  }, [activeTab, hasLoadedMatches]);
 
   /**
    * Loads the user's matches from the database, fetches the profile details,
    * and dynamically calculates bidirectional video like statistics.
    */
-  async function loadMatches(sortBy: "theyLikedYou" | "youLikedThem" = matchSortBy) {
-    setIsLoadingMatches(true)
+  async function loadMatches(
+    page = currentPage,
+    sortBy: "theyLikedYou" | "youLikedThem" = matchSortBy,
+  ) {
+    setIsLoadingMatches(true);
 
     try {
-      const supabase = createSupabaseBrowserClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      const supabase = createSupabaseBrowserClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
 
-      const serverMatches = await getPaginatedMatches(user.id, 1, sortBy)
-      const mappedMatches: MatchItem[] = (serverMatches || []).map((match: any) => ({
-        ...match,
-        avatar: match.avatar
-          ? resolveProfilePhotoUrl(supabase, match.avatar, match.uploadedAt)
-          : "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop",
-      }))
+      const serverPayload = await getMatchesPage(
+        user.id,
+        page,
+        MATCHES_PAGE_SIZE,
+        sortBy,
+      );
+      const mappedMatches: MatchItem[] = (serverPayload.items || []).map(
+        (match: any) => ({
+          ...match,
+          avatar: match.avatar
+            ? resolveProfilePhotoUrl(supabase, match.avatar, match.uploadedAt)
+            : "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop",
+        }),
+      );
 
-      setMatches(mappedMatches)
-
+      setMatches(mappedMatches);
+      setCurrentPage(serverPayload.page);
+      setMatchesNextPage(serverPayload.nextPage);
     } catch (error) {
-      console.error("Error loading matches:", error)
+      console.error("Error loading matches:", error);
     } finally {
-      setHasLoadedMatches(true)
-      setIsLoadingMatches(false)
+      setHasLoadedMatches(true);
+      setIsLoadingMatches(false);
     }
   }
 
   async function loadMatchesTotalCount() {
     try {
-      const supabase = createSupabaseBrowserClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      const supabase = createSupabaseBrowserClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
 
-      const totalCount = await getMatchesTotalCount(user.id)
-      setMatchesTotalCount(totalCount)
+      const totalCount = await getMatchesTotalCount(user.id);
+      setMatchesTotalCount(totalCount);
     } catch (error) {
-      console.error("Error loading matches total count:", error)
-      setMatchesTotalCount(0)
+      console.error("Error loading matches total count:", error);
+      setMatchesTotalCount(0);
     }
   }
 
   async function loadConversations() {
-    setIsLoadingConversations(true)
+    setIsLoadingConversations(true);
     try {
-      const supabase = createSupabaseBrowserClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      const supabase = createSupabaseBrowserClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
 
-      const data = await getUserConversations(user.id)
-      
+      const data = await getUserConversations(user.id);
+
       // Resolve avatar URLs
       const mapped: ConversationItem[] = (data || []).map((conv: any) => {
-        let avatarUrl = "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop"
+        let avatarUrl =
+          "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=100&h=100&fit=crop";
 
         if (conv.avatar) {
-          avatarUrl = resolveProfilePhotoUrl(supabase, conv.avatar, conv.uploadedAt)
+          avatarUrl = resolveProfilePhotoUrl(
+            supabase,
+            conv.avatar,
+            conv.uploadedAt,
+          );
         }
         return {
           ...conv,
-          avatar: avatarUrl
-        }
-      })
+          avatar: avatarUrl,
+        };
+      });
 
-      setConversations(mapped)
+      setConversations(mapped);
     } catch (error) {
-      console.error("Error loading conversations:", error)
+      console.error("Error loading conversations:", error);
     } finally {
-      setIsLoadingConversations(false)
+      setIsLoadingConversations(false);
     }
   }
 
@@ -149,7 +190,7 @@ export default function InboxPage() {
               "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200",
               activeTab === "messages"
                 ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
+                : "bg-secondary text-muted-foreground hover:text-foreground",
             )}
           >
             <MessageCircle className="w-4 h-4" />
@@ -161,7 +202,7 @@ export default function InboxPage() {
               "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200",
               activeTab === "matches"
                 ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
+                : "bg-secondary text-muted-foreground hover:text-foreground",
             )}
           >
             <Heart className="w-4 h-4" />
@@ -176,7 +217,9 @@ export default function InboxPage() {
           {/* New Matches Preview */}
           {matches.filter((m) => m.isNew).length > 0 && (
             <div className="p-4 lg:p-6 border-b border-border">
-              <h2 className="text-sm font-semibold text-muted-foreground mb-4">NEW MATCHES</h2>
+              <h2 className="text-sm font-semibold text-muted-foreground mb-4">
+                NEW MATCHES
+              </h2>
               <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
                 {matches
                   .filter((m) => m.isNew)
@@ -195,7 +238,9 @@ export default function InboxPage() {
                           <Music2 className="w-3 h-3 text-primary-foreground" />
                         </div>
                       </div>
-                      <span className="text-sm text-foreground">{match.name.split(" ")[0]}</span>
+                      <span className="text-sm text-foreground">
+                        {match.name.split(" ")[0]}
+                      </span>
                     </Link>
                   ))}
               </div>
@@ -231,7 +276,7 @@ export default function InboxPage() {
                           "font-semibold truncate",
                           conversation.unread
                             ? "text-foreground"
-                            : "text-muted-foreground"
+                            : "text-muted-foreground",
                         )}
                       >
                         {conversation.name}
@@ -245,7 +290,7 @@ export default function InboxPage() {
                         "text-sm truncate",
                         conversation.unread
                           ? "text-foreground font-medium"
-                          : "text-muted-foreground"
+                          : "text-muted-foreground",
                       )}
                     >
                       {conversation.lastMessage}
@@ -262,7 +307,8 @@ export default function InboxPage() {
                   No messages yet
                 </h3>
                 <p className="text-muted-foreground text-center">
-                  When you match with musicians, your conversations will appear here
+                  When you match with musicians, your conversations will appear
+                  here
                 </p>
               </div>
             )}
@@ -278,16 +324,21 @@ export default function InboxPage() {
               <Select
                 value={matchSortBy}
                 onValueChange={(val: "theyLikedYou" | "youLikedThem") => {
-                  setMatchSortBy(val)
-                  void loadMatches(val)
+                  setMatchSortBy(val);
+                  setCurrentPage(1);
+                  void loadMatches(1, val);
                 }}
               >
                 <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Sort by" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="theyLikedYou">Sort by: Liked you</SelectItem>
-                  <SelectItem value="youLikedThem">Sort by: You liked</SelectItem>
+                  <SelectItem value="theyLikedYou">
+                    Sort by: Liked you
+                  </SelectItem>
+                  <SelectItem value="youLikedThem">
+                    Sort by: You liked
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -299,87 +350,144 @@ export default function InboxPage() {
                 <Loader2 className="w-10 h-10 text-muted-foreground animate-spin" />
               </div>
             ) : matches.length > 0 ? (
-              matches.map((match) => (
-              <Link
-                key={match.id}
-                href={`/inbox/${match.id}`}
-                className="flex items-center gap-4 p-4 lg:p-6 hover:bg-card/50 transition-colors"
-              >
-                {/* Avatar */}
-                <div className="relative flex-shrink-0">
-                  <div
-                    className="w-14 h-14 rounded-full bg-cover bg-center ring-2 ring-border"
-                    style={{ backgroundImage: `url(${match.avatar})` }}
-                  />
-                  {match.isNew && (
-                    <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                      <span className="text-xs font-bold text-primary-foreground">!</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-foreground truncate">
-                    {match.name}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    {match.isNew ? "New match" : "Matched"}
-                  </p>
-                </div>
-
-                {/* Like counts */}
-                <div className="flex items-center gap-6">
-                  <div className="text-center">
-                    <div className="flex items-center gap-1 text-primary mb-1">
-                      <Heart className="w-4 h-4 fill-current" />
-                      <span className="font-bold text-lg">{match.theyLikedYou}</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">liked you</p>
-                  </div>
-                  <div className="text-center">
-                    <div className="flex items-center justify-center gap-1 text-accent mb-1">
-                      <Heart className="w-4 h-4 fill-current" />
-                      <span className="font-bold text-lg">{match.youLikedThem}</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">you liked</p>
-                  </div>
-                </div>
-
-                {/* Arrow */}
-                <div className="flex-shrink-0 text-muted-foreground ml-2">
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
+              <>
+                {matches.map((match) => (
+                  <Link
+                    key={match.id}
+                    href={`/inbox/${match.id}`}
+                    className="flex items-center gap-4 p-4 lg:p-6 hover:bg-card/50 transition-colors"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
+                    {/* Avatar */}
+                    <div className="relative flex-shrink-0">
+                      <div
+                        className="w-14 h-14 rounded-full bg-cover bg-center ring-2 ring-border"
+                        style={{ backgroundImage: `url(${match.avatar})` }}
+                      />
+                      {match.isNew && (
+                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                          <span className="text-xs font-bold text-primary-foreground">
+                            !
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-foreground truncate">
+                        {match.name}
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {match.isNew ? "New match" : "Matched"}
+                      </p>
+                    </div>
+
+                    {/* Like counts */}
+                    <div className="flex items-center gap-6">
+                      <div className="text-center">
+                        <div className="flex items-center gap-1 text-primary mb-1">
+                          <Heart className="w-4 h-4 fill-current" />
+                          <span className="font-bold text-lg">
+                            {match.theyLikedYou}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          liked you
+                        </p>
+                      </div>
+                      <div className="text-center">
+                        <div className="flex items-center justify-center gap-1 text-accent mb-1">
+                          <Heart className="w-4 h-4 fill-current" />
+                          <span className="font-bold text-lg">
+                            {match.youLikedThem}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          you liked
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Arrow */}
+                    <div className="flex-shrink-0 text-muted-foreground ml-2">
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 5l7 7-7 7"
+                        />
+                      </svg>
+                    </div>
+                  </Link>
+                ))}
+                <div className="px-4 py-6 border-t border-border">
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (isLoadingMatches || currentPage <= 1) return;
+                            void loadMatches(currentPage - 1, matchSortBy);
+                          }}
+                          aria-disabled={currentPage <= 1 || isLoadingMatches}
+                          className={cn(
+                            (currentPage <= 1 || isLoadingMatches) &&
+                              "pointer-events-none opacity-50",
+                          )}
+                        />
+                      </PaginationItem>
+                      <PaginationItem>
+                        <PaginationLink
+                          href="#"
+                          isActive
+                          onClick={(e) => e.preventDefault()}
+                        >
+                          {currentPage}
+                        </PaginationLink>
+                      </PaginationItem>
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (isLoadingMatches || !matchesNextPage) return;
+                            void loadMatches(matchesNextPage, matchSortBy);
+                          }}
+                          aria-disabled={!matchesNextPage || isLoadingMatches}
+                          className={cn(
+                            (!matchesNextPage || isLoadingMatches) &&
+                              "pointer-events-none opacity-50",
+                          )}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
-              </Link>
-            ))
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20 px-4">
-              <div className="w-20 h-20 rounded-full bg-secondary flex items-center justify-center mb-4">
-                <Heart className="w-10 h-10 text-muted-foreground" />
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 px-4">
+                <div className="w-20 h-20 rounded-full bg-secondary flex items-center justify-center mb-4">
+                  <Heart className="w-10 h-10 text-muted-foreground" />
+                </div>
+                <h3 className="text-lg font-semibold text-foreground mb-2">
+                  No matches yet
+                </h3>
+                <p className="text-muted-foreground text-center">
+                  Start swiping on the feed to find and match with musicians
+                </p>
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">
-                No matches yet
-              </h3>
-              <p className="text-muted-foreground text-center">
-                Start swiping on the feed to find and match with musicians
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
         </div>
       )}
     </div>
-  )
+  );
 }

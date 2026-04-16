@@ -73,8 +73,6 @@ export type MatchItem = {
   name: string;
   avatar: string;
   uploadedAt: string | null;
-  theyLikedYou: number;
-  youLikedThem: number;
   isNew: boolean;
 };
 
@@ -146,38 +144,6 @@ export async function getMatchesPage(
         console.error("Profiles fetch error:", profilesError);
       }
 
-      const theyLikedYouData = await getTheyLikedYouCounts(
-        matchedUserIds,
-        currentUserId,
-      );
-      const theyLikedYouCounts = new Map<string, number>();
-      theyLikedYouData?.forEach((row: any) => {
-        theyLikedYouCounts.set(
-          row.user_id,
-          (theyLikedYouCounts.get(row.user_id) || 0) + 1,
-        );
-      });
-
-      const { data: youLikedThemData } = await supabase
-        .from("swipes")
-        .select(
-          `
-          posts!inner ( user_id )
-        `,
-        )
-        .eq("user_id", currentUserId)
-        .eq("direction", "like")
-        .in("posts.user_id", matchedUserIds);
-
-      const youLikedThemCounts = new Map<string, number>();
-      youLikedThemData?.forEach((row: any) => {
-        const postOwnerId = row.posts.user_id;
-        youLikedThemCounts.set(
-          postOwnerId,
-          (youLikedThemCounts.get(postOwnerId) || 0) + 1,
-        );
-      });
-
       const assembledMatches = (profilesData || []).map((profile: any) => {
         const userPhotos = [...(profile.profile_photos || [])];
         userPhotos.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
@@ -189,23 +155,11 @@ export async function getMatchesPage(
           name: profile.display_name || "Musician",
           avatar: primaryPhoto?.url || "",
           uploadedAt: primaryPhoto?.uploaded_at || null,
-          theyLikedYou: theyLikedYouCounts.get(profile.id) || 0,
-          youLikedThem: youLikedThemCounts.get(profile.id) || 0,
           isNew: matchInfo?.isNew ?? false,
         };
       });
 
-      const items = assembledMatches.sort((a, b) => {
-        if (sort === "youLikedThem") {
-          if (b.youLikedThem !== a.youLikedThem)
-            return b.youLikedThem - a.youLikedThem;
-          return b.theyLikedYou - a.theyLikedYou;
-        }
-
-        if (b.theyLikedYou !== a.theyLikedYou)
-          return b.theyLikedYou - a.theyLikedYou;
-        return b.youLikedThem - a.youLikedThem;
-      });
+      const items = assembledMatches;
 
       return {
         items,
@@ -215,6 +169,88 @@ export async function getMatchesPage(
       };
     },
   );
+}
+
+export type MatchCountsById = Record<
+  string,
+  { theyLikedYou: number; youLikedThem: number }
+>;
+
+export async function getMatchCountsForMatchIds(
+  currentUserId: string,
+  matchIds: string[],
+): Promise<MatchCountsById> {
+  if (!matchIds?.length) return {};
+
+  const supabase = createSupabaseAdminClient();
+
+  const { data: userMatches, error: matchesError } = await supabase
+    .from("matches")
+    .select("id, user1_id, user2_id")
+    .in("id", matchIds)
+    .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`);
+
+  if (matchesError || !userMatches?.length) {
+    if (matchesError) {
+      console.error("Error fetching matches for batched counts:", matchesError);
+    }
+    return {};
+  }
+
+  const matchedUserIds = userMatches.map((match) =>
+    match.user1_id === currentUserId ? match.user2_id : match.user1_id,
+  );
+  const matchedUserIdByMatchId = new Map(
+    userMatches.map((match) => [
+      match.id,
+      match.user1_id === currentUserId ? match.user2_id : match.user1_id,
+    ]),
+  );
+
+  const theyLikedYouData = await getTheyLikedYouCounts(matchedUserIds, currentUserId);
+  const theyLikedYouByUserId = new Map<string, number>();
+  theyLikedYouData?.forEach((row: any) => {
+    theyLikedYouByUserId.set(
+      row.user_id,
+      (theyLikedYouByUserId.get(row.user_id) || 0) + 1,
+    );
+  });
+
+  const { data: youLikedThemData, error: youLikedThemError } = await supabase
+    .from("swipes")
+    .select(
+      `
+      posts!inner ( user_id )
+    `,
+    )
+    .eq("user_id", currentUserId)
+    .eq("direction", "like")
+    .in("posts.user_id", matchedUserIds);
+
+  if (youLikedThemError) {
+    console.error("Error fetching youLikedThem batched counts:", youLikedThemError);
+  }
+
+  const youLikedThemByUserId = new Map<string, number>();
+  youLikedThemData?.forEach((row: any) => {
+    const postOwnerId = row.posts.user_id;
+    youLikedThemByUserId.set(
+      postOwnerId,
+      (youLikedThemByUserId.get(postOwnerId) || 0) + 1,
+    );
+  });
+
+  const countMap: MatchCountsById = {};
+  for (const match of userMatches) {
+    const matchedUserId = matchedUserIdByMatchId.get(match.id);
+    if (!matchedUserId) continue;
+    countMap[match.id] = {
+      theyLikedYou: theyLikedYouByUserId.get(matchedUserId) || 0,
+      youLikedThem: youLikedThemByUserId.get(matchedUserId) || 0,
+    };
+  }
+
+  return countMap;
 }
 
 /**

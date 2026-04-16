@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, Music2, Heart, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { resolveProfilePhotoUrl } from "@/lib/supabase/storage-cache-control";
 import {
   getMatchesPage,
+  getMatchCountsForMatchIds,
   getMatchesTotalCount,
   getUserConversations,
 } from "./actions";
@@ -45,10 +46,16 @@ type MatchItem = {
   name: string;
   avatar: string;
   uploadedAt: string | null;
-  theyLikedYou: number;
-  youLikedThem: number;
   isNew: boolean;
 };
+
+type MatchCountsMap = Record<
+  string,
+  {
+    theyLikedYou: number;
+    youLikedThem: number;
+  }
+>;
 
 type TabType = "messages" | "matches";
 const MATCHES_PAGE_SIZE = 25;
@@ -56,6 +63,7 @@ const MATCHES_PAGE_SIZE = 25;
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<TabType>("messages");
   const [matches, setMatches] = useState<MatchItem[]>([]);
+  const [matchCounts, setMatchCounts] = useState<MatchCountsMap>({});
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [matchesTotalCount, setMatchesTotalCount] = useState(0);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
@@ -68,6 +76,8 @@ export default function InboxPage() {
   const [matchesNextPage, setMatchesNextPage] = useState<number | undefined>(
     undefined,
   );
+  const [isLoadingMatchCounts, setIsLoadingMatchCounts] = useState(false);
+  const latestMatchCountRequestRef = useRef(0);
 
   useEffect(() => {
     void loadMatchesTotalCount();
@@ -115,6 +125,7 @@ export default function InboxPage() {
       setMatches(mappedMatches);
       setCurrentPage(serverPayload.page);
       setMatchesNextPage(serverPayload.nextPage);
+      void loadMatchCountsForPage(mappedMatches.map((match) => match.id));
     } catch (error) {
       console.error("Error loading matches:", error);
     } finally {
@@ -122,6 +133,55 @@ export default function InboxPage() {
       setIsLoadingMatches(false);
     }
   }
+
+  async function loadMatchCountsForPage(matchIds: string[]) {
+    const normalizedIds = [...new Set(matchIds)].filter(Boolean);
+    if (!normalizedIds.length) return;
+
+    const requestId = latestMatchCountRequestRef.current + 1;
+    latestMatchCountRequestRef.current = requestId;
+    setIsLoadingMatchCounts(true);
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const countsById = await getMatchCountsForMatchIds(user.id, normalizedIds);
+
+      if (latestMatchCountRequestRef.current !== requestId) return;
+      setMatchCounts((prev) => ({ ...prev, ...countsById }));
+    } catch (error) {
+      console.error("Error loading match counts:", error);
+    } finally {
+      if (latestMatchCountRequestRef.current === requestId) {
+        setIsLoadingMatchCounts(false);
+      }
+    }
+  }
+
+  const sortedMatches = useMemo(() => {
+    if (!matches.length) return [];
+
+    return [...matches].sort((a, b) => {
+      const aCounts = matchCounts[a.id] || { theyLikedYou: 0, youLikedThem: 0 };
+      const bCounts = matchCounts[b.id] || { theyLikedYou: 0, youLikedThem: 0 };
+
+      if (matchSortBy === "youLikedThem") {
+        if (bCounts.youLikedThem !== aCounts.youLikedThem) {
+          return bCounts.youLikedThem - aCounts.youLikedThem;
+        }
+        return bCounts.theyLikedYou - aCounts.theyLikedYou;
+      }
+
+      if (bCounts.theyLikedYou !== aCounts.theyLikedYou) {
+        return bCounts.theyLikedYou - aCounts.theyLikedYou;
+      }
+      return bCounts.youLikedThem - aCounts.youLikedThem;
+    });
+  }, [matches, matchCounts, matchSortBy]);
 
   async function loadMatchesTotalCount() {
     try {
@@ -351,81 +411,90 @@ export default function InboxPage() {
               </div>
             ) : matches.length > 0 ? (
               <>
-                {matches.map((match) => (
-                  <Link
-                    key={match.id}
-                    href={`/inbox/${match.id}`}
-                    className="flex items-center gap-4 p-4 lg:p-6 hover:bg-card/50 transition-colors"
-                  >
-                    {/* Avatar */}
-                    <div className="relative flex-shrink-0">
-                      <div
-                        className="w-14 h-14 rounded-full bg-cover bg-center ring-2 ring-border"
-                        style={{ backgroundImage: `url(${match.avatar})` }}
-                      />
-                      {match.isNew && (
-                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                          <span className="text-xs font-bold text-primary-foreground">
-                            !
-                          </span>
-                        </div>
-                      )}
-                    </div>
+                {sortedMatches.map((match) => {
+                  const counts = matchCounts[match.id];
 
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-foreground truncate">
-                        {match.name}
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        {match.isNew ? "New match" : "Matched"}
-                      </p>
-                    </div>
-
-                    {/* Like counts */}
-                    <div className="flex items-center gap-6">
-                      <div className="text-center">
-                        <div className="flex items-center gap-1 text-primary mb-1">
-                          <Heart className="w-4 h-4 fill-current" />
-                          <span className="font-bold text-lg">
-                            {match.theyLikedYou}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          liked you
-                        </p>
-                      </div>
-                      <div className="text-center">
-                        <div className="flex items-center justify-center gap-1 text-accent mb-1">
-                          <Heart className="w-4 h-4 fill-current" />
-                          <span className="font-bold text-lg">
-                            {match.youLikedThem}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          you liked
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Arrow */}
-                    <div className="flex-shrink-0 text-muted-foreground ml-2">
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 5l7 7-7 7"
+                  return (
+                    <Link
+                      key={match.id}
+                      href={`/inbox/${match.id}`}
+                      className="flex items-center gap-4 p-4 lg:p-6 hover:bg-card/50 transition-colors"
+                    >
+                      {/* Avatar */}
+                      <div className="relative flex-shrink-0">
+                        <div
+                          className="w-14 h-14 rounded-full bg-cover bg-center ring-2 ring-border"
+                          style={{ backgroundImage: `url(${match.avatar})` }}
                         />
-                      </svg>
-                    </div>
-                  </Link>
-                ))}
+                        {match.isNew && (
+                          <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                            <span className="text-xs font-bold text-primary-foreground">
+                              !
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-foreground truncate">
+                          {match.name}
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          {match.isNew ? "New match" : "Matched"}
+                        </p>
+                      </div>
+
+                      {/* Like counts */}
+                      <div className="flex items-center gap-6">
+                        <div className="text-center">
+                          <div className="flex items-center gap-1 text-primary mb-1">
+                            <Heart className="w-4 h-4 fill-current" />
+                            <span className="font-bold text-lg">
+                              {counts ? counts.theyLikedYou : "—"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            liked you
+                          </p>
+                        </div>
+                        <div className="text-center">
+                          <div className="flex items-center justify-center gap-1 text-accent mb-1">
+                            <Heart className="w-4 h-4 fill-current" />
+                            <span className="font-bold text-lg">
+                              {counts ? counts.youLikedThem : "—"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            you liked
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Arrow */}
+                      <div className="flex-shrink-0 text-muted-foreground ml-2">
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 5l7 7-7 7"
+                          />
+                        </svg>
+                      </div>
+                    </Link>
+                  );
+                })}
+                {isLoadingMatchCounts && (
+                  <div className="px-4 py-2 text-xs text-muted-foreground">
+                    Loading like counts...
+                  </div>
+                )}
                 <div className="px-4 py-6 border-t border-border">
                   <Pagination>
                     <PaginationContent>

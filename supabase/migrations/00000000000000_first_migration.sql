@@ -448,17 +448,17 @@ CREATE POLICY swipes_insert_own ON public.swipes FOR INSERT TO authenticated WIT
 CREATE POLICY swipes_select_own ON public.swipes FOR SELECT TO authenticated USING (auth.uid() = user_id);
 CREATE POLICY swipes_update_own ON public.swipes FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
-CREATE POLICY profile_photos_select_feed_public_post_authors ON public.profile_photos FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = profile_photos.user_id) AND ((posts.visibility)::text = 'public'::text)))));
-CREATE POLICY profiles_select_feed_public_post_authors ON public.profiles FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = profiles.id) AND ((posts.visibility)::text = 'public'::text)))));
-CREATE POLICY user_genres_select_feed_public_post_authors ON public.user_genres FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = user_genres.user_id) AND ((posts.visibility)::text = 'public'::text)))));
-CREATE POLICY user_instruments_select_feed_public_post_authors ON public.user_instruments FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = user_instruments.user_id) AND ((posts.visibility)::text = 'public'::text)))));
+CREATE POLICY profile_photos_select_feed_public_post_authors ON public.profile_photos FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = profile_photos.user_id) AND ((posts.visibility)::text = 'public'::text))));
+CREATE POLICY profiles_select_feed_public_post_authors ON public.profiles FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = profiles.id) AND ((posts.visibility)::text = 'public'::text))));
+CREATE POLICY user_genres_select_feed_public_post_authors ON public.user_genres FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = user_genres.user_id) AND ((posts.visibility)::text = 'public'::text))));
+CREATE POLICY user_instruments_select_feed_public_post_authors ON public.user_instruments FOR SELECT TO authenticated USING (EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.user_id = user_instruments.user_id) AND ((posts.visibility)::text = 'public'::text))));
 
 
 -- =============================================================================
 -- 5. Public Feed Storage Access (20260320120000_feed_public_video_access.sql)
 -- =============================================================================
 
-CREATE POLICY storage_user_posts_select_public_feed ON storage.objects FOR SELECT TO authenticated USING (bucket_id = public.user_posts_bucket() AND EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.video_url = objects.name) AND ((posts.visibility)::text = 'public'::text)))));
+CREATE POLICY storage_user_posts_select_public_feed ON storage.objects FOR SELECT TO authenticated USING (bucket_id = public.user_posts_bucket() AND EXISTS ( SELECT 1 FROM public.posts WHERE ((posts.video_url = objects.name) AND ((posts.visibility)::text = 'public'::text))));
 
 
 -- =============================================================================
@@ -620,5 +620,11 @@ BEGIN
     WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'messages'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
-  END IF;
 END $$;
+
+-- =============================================================================
+-- 9. Grants (Fix for permission denied errors)
+-- =============================================================================
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;

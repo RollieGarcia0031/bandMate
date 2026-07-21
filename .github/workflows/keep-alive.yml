@@ -1,0 +1,21 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    # Runs twice a week (Monday and Thursday at 00:00 UTC)
+    - cron: '0 0 * * 1,4'
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Keep-Alive API Endpoint
+        run: |
+          URL="${APP_URL%/}/keep-alive"
+          echo "Sending keep-alive request to $URL"
+          curl --fail -sS -X GET "$URL" \
+            -H "Authorization: Bearer $KEEP_ALIVE_TOKEN"
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          KEEP_ALIVE_TOKEN: ${{ secrets.KEEP_ALIVE_TOKEN }}
